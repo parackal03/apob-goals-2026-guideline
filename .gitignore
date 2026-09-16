@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# R session state. Never commit these: .RData in this project is ~43 MB and
+# silently restores stale objects into a fresh session, which is exactly the
+# failure mode this repository exists to rule out.
+# ---------------------------------------------------------------------------
+.RData
+.Rhistory
+.Rapp.history
+.Rproj.user/
+*.Rproj
+.Renviron
+
+# ---------------------------------------------------------------------------
+# Downloaded source data. Everything here is fetched automatically on first run
+# from CDC/NCHS, so committing it adds hundreds of megabytes that anyone can
+# reproduce with one command. nhanes_cache/ holds parsed .rds files derived
+# from it and is likewise regenerable.
+# ---------------------------------------------------------------------------
+nhanes_raw/
+nhanes_cache/
+
+# ---------------------------------------------------------------------------
+# Editor and OS noise
+# ---------------------------------------------------------------------------
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---------------------------------------------------------------------------
+# Working copies. Keep history in git, not in filenames.
+# ---------------------------------------------------------------------------
+*.bak
+*.bak2
+*.pre_dani2
+*.presplit
+*~

@@ -1,0 +1,69 @@
+cff-version: 1.2.0
+message: >-
+  If you use this code, please cite it using the metadata below. Once the
+  accompanying paper is published, please cite the paper instead; a
+  preferred-citation block will be added here at that point.
+title: >-
+  Analysis code for apolipoprotein B goal assignment and attainment under
+  the 2026 ACC/AHA dyslipidemia guideline (NHANES 2005-2016)
+abstract: >-
+  R code implementing Figure 1 of the 2026 ACC/AHA dyslipidemia guideline
+  across six NHANES cycles (2005-2016), and computing apolipoprotein B goal
+  assignment, goal attainment, and the associated sensitivity analyses.
+  Because Figure 1's patient-population rows overlap and the guideline states
+  no precedence rule, goals are assigned by an order-independent union rule:
+  a goal applies if any matched row states one, and where matched rows differ
+  the most stringent value applies. No data are distributed; the NHANES cycles
+  and the NCHS linked mortality files are downloaded from CDC at run time.
+type: software
+authors:
+  - given-names: Vishal
+    family-names: Parackal
+    affiliation: >-
+      Division of Cardiology, Lahey Hospital and Medical Center,
+      Beth Israel Lahey Health, Burlington, Massachusetts, USA
+  - given-names: Arjun
+    family-names: Jayakumar
+    affiliation: >-
+      Division of Cardiology, Lahey Hospital and Medical Center,
+      Beth Israel Lahey Health, Burlington, Massachusetts, USA
+license: MIT
+keywords:
+  - apolipoprotein B
+  - dyslipidemia
+  - clinical practice guidelines
+  - guideline implementation
+  - NHANES
+  - complex survey analysis
+  - cardiovascular disease prevention
+  - reproducible research
+
+# ---------------------------------------------------------------------------
+# TO COMPLETE BEFORE, OR JUST AFTER, THE FIRST PUSH
+#
+#   repository-code: the GitHub URL, once the repository exists, e.g.
+#     repository-code: "https://github.com/<user>/<repo>"
+#
+#   version and date-released: fill these when you tag a release. Cutting a
+#     release is also what triggers Zenodo to mint the DOI the manuscript's
+#     Data Sharing Statement promises, e.g.
+#     version: "1.0.0"
+#     date-released: "2026-09-15"
+#
+#   doi: the Zenodo DOI, once minted.
+#
+#   orcid: add under each author if you have one, as
+#     orcid: "https://orcid.org/0000-0000-0000-0000"
+#     Deliberately omitted rather than guessed.
+#
+# ON PUBLICATION, add a preferred-citation block so that citing the code
+# resolves to the paper:
+#
+#   preferred-citation:
+#     type: article
+#     title: "<the paper's title>"
+#     authors: [<the full author list, in byline order>]
+#     journal: "JAMA Cardiology"
+#     year: 2026
+#     doi: "<the article DOI>"
+# ---------------------------------------------------------------------------
