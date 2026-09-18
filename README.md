@@ -4,7 +4,7 @@ R code implementing Figure 1 of the 2026 ACC/AHA dyslipidemia guideline across
 NHANES 2005–2016, and computing goal assignment, goal attainment and the
 associated sensitivity analyses.
 
-Code state as of 15 September 2026.
+Code state as of 18 September 2026.
 
 No data are distributed here. Everything the analysis needs is downloaded at
 run time from CDC and NCHS.
@@ -29,12 +29,12 @@ diffing this run's log against the previous one shows which step it moved at.
 
 | Order | Script | What it does | Time |
 |---|---|---|---|
-| 1 | `nhanes_apob_analysis.R` | Main analysis: download, merge, derive, implement Figure 1, every research question | 45-95 min |
+| 1 | `nhanes_apob_analysis.R` | Main analysis: download, merge, derive, implement Figure 1, every research question | 57-147 min |
 | 2 | `precedence_and_model_analyses.R` | Precedence sensitivity across all 120 orderings, denominator variants, EPV, Firth | <1 min |
 | 3 | `precedence_diagnostics.R` | Two diagnostics: precedence driver, stringency sensitivity | fast |
 | 4 | `verify_run.R` | 29 automated checks; writes `verification_report.csv` | fast |
 | 5 | `table1_and_figures.R` | Baseline characteristics table and the figures | fast |
-| 6 | `pathway_and_sensitivity_analyses.R` | Goal-assignment pathways, secondary-prevention routes, phenotype at LDL-C goal, hypertension threshold, stroke-only ASCVD, no-age-limit secondary prevention, ASCVD risk-factor age rule | 33-45 min |
+| 6 | `pathway_and_sensitivity_analyses.R` | Goal-assignment pathways, secondary-prevention routes, phenotype at LDL-C goal, hypertension threshold, stroke-only ASCVD, no-age-limit secondary prevention, ASCVD risk-factor age rule | 30-38 min |
 | 7 | `compare_blind_coding.R` | Agreement, Cohen's kappa, and the effect of coding differences on the headline estimates | fast |
 
 Each later script reads objects the earlier ones leave in the global
@@ -72,7 +72,7 @@ Subsequent runs read the cache. Delete `nhanes_cache/` to force a clean
 re-parse, `nhanes_raw/` to force a fresh download. Neither directory is
 committed; both are in `.gitignore`.
 
-Outputs — roughly 57 CSVs named by research question (`rq*`, `rev*`, `sens_*`),
+Outputs — roughly 87 CSVs named by research question (`rq*`, `rev*`, `sens_*`),
 `verification_report.csv`, `session_info.txt` and the figures — are written into
 the working directory when the scripts run. They are not committed either.
 
@@ -138,16 +138,24 @@ build; the error message gives the full command.
 
 | Script | Lines | Purpose |
 |---|---|---|
-| `run_all.R` | 178 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
-| `nhanes_apob_analysis.R` | 4177 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~45 CSVs (including the goal-assignment bounds for adults PREVENT cannot score, and the PREVENT input-range diagnostic) |
+| `run_all.R` | 180 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
+| `nhanes_apob_analysis.R` | 4371 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~47 CSVs (including the goal-assignment bounds for adults PREVENT cannot score, the PREVENT input-range diagnostic, and the base-versus-extended PREVENT model comparison) |
 | `precedence_and_model_analyses.R` | 712 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
 | `precedence_diagnostics.R` | 142 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
 | `verify_run.R` | 429 | 29 independent checks: convergence, separation, goal-cell consistency, survey design sanity, NCHS presentation standards, cycle influence, mortality event counts, config provenance |
-| `table1_and_figures.R` | 398 | Baseline characteristics table and the figures |
-| `pathway_and_sensitivity_analyses.R` | 639 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
+| `table1_and_figures.R` | 416 | Baseline characteristics table, the figures, and the per-cycle apoB means behind the calibration figure |
+| `pathway_and_sensitivity_analyses.R` | 644 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
 | `compare_blind_coding.R` | 224 | Agreement, Cohen's kappa, weighted kappa, and the effect of coding differences on the headline estimates |
 | `export_blind_dataset.R` | 115 | Builds the de-identified dataset released to the independent coder, guarding against 24 forbidden column patterns |
 | `cohort_definition_diagnostics.R` | 185 | What the LDL-C eligibility filter excludes, and the hypertension definition under first-reading versus averaged blood pressure |
+
+
+> **Run time.** A full run took 88 minutes on 18 September and 186 minutes
+> later the same day, after the base-versus-extended PREVENT comparison was
+> added. The difference is almost entirely avoidable: `compute_prevent_risk()`
+> is called for each cohort the sensitivity analyses rebuild, and it currently
+> scores the extended model on every one of them although only the comparison
+> reads the result. Making that scoring opt-in removes about 90 minutes.
 
 ---
 

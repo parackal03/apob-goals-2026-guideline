@@ -988,7 +988,15 @@ compute_prevent_risk <- function(df) {
       prevent_hdl_c   = clip(LBDHDD,  20, 100),
       prevent_egfr    = clip(egfr,    15, 140),
       prevent_bmi     = clip(BMXBMI,  18.5, 39.9),
-      prevent_sex     = ifelse(RIAGENDR == 2, "female", "male")
+      prevent_sex     = ifelse(RIAGENDR == 2, "female", "male"),
+      ## Round-6 (Dani): the two optional PREVENT predictors NHANES can
+      ## support. Clipped to preventr's documented ranges the same way as
+      ## the required inputs. The third optional predictor, the social
+      ## deprivation index, needs a ZIP code that the public-use files do
+      ## not release, so the extended model here is base + HbA1c + UACR,
+      ## never the full published model.
+      prevent_hba1c   = clip(LBXGH, 4.5, 15),
+      prevent_uacr    = clip(uacr,  0.1, 25000)
     )
 
   n_clipped <- sum(
@@ -1036,6 +1044,60 @@ compute_prevent_risk <- function(df) {
 
   out <- df %>%
     left_join(scored %>% select(SEQN, cycle, prevent_ascvd_10yr = ascvd), by = c("SEQN", "cycle"))
+
+  ## ---- EXTENDED-MODEL 10-YEAR RISK (round 6, Dani) --------------------
+  ## Dani asked us to assess incorporating HbA1c and UACR. They are not a
+  ## correction to the base score, they are a different score: PREVENT's
+  ## extended equations give a different 10-year risk, and Figure 1's
+  ## primary-prevention row turns on whether that risk crosses 10%. So a
+  ## reader with the same data could reasonably implement the guideline
+  ## either way, and the difference belongs in the paper beside the other
+  ## interpretive dependencies rather than being settled silently here.
+  ##
+  ## Scored into its own column. NOTHING downstream reads it except the
+  ## sensitivity block, so the primary analysis is untouched whatever this
+  ## returns. Wrapped so a failure costs a message, not the run.
+  ext <- tryCatch({
+    have <- !is.na(scorable$prevent_hba1c) | !is.na(scorable$prevent_uacr)
+    message("Extended PREVENT inputs available for ", sum(have), " of ",
+            nrow(scorable), " scorable records (HbA1c ",
+            sum(!is.na(scorable$prevent_hba1c)), ", UACR ",
+            sum(!is.na(scorable$prevent_uacr)), ").")
+    e <- estimate_risk(
+      use_dat = scorable %>%
+        transmute(
+          SEQN, cycle,
+          age = RIDAGEYR, sex = prevent_sex, sbp = prevent_sbp,
+          bp_tx = as.logical(on_antihtn), total_c = prevent_total_c,
+          hdl_c = prevent_hdl_c, statin = as.logical(on_statin),
+          dm = as.logical(diabetes), smoking = as.logical(current_smoker),
+          egfr = prevent_egfr, bmi = prevent_bmi,
+          hba1c = prevent_hba1c, uacr = prevent_uacr
+        ),
+      time = "10yr", quiet = TRUE)
+    stopifnot("ascvd" %in% names(e))
+    ## preventr reports which variant it actually used per record; with
+    ## optional_strict = FALSE (its default) a record with an unusable
+    ## optional value silently falls back to the base model, so the
+    ## comparison is only honest if we can say which is which.
+    keep <- c("SEQN", "cycle", "ascvd",
+              intersect("model", names(e)))
+    e[, keep, drop = FALSE]
+  }, error = function(err) {
+    message("*** Extended PREVENT scoring FAILED: ", conditionMessage(err),
+            "\n    The run continues; the base-model analysis is unaffected ",
+            "and the extended-model sensitivity will be skipped.")
+    NULL
+  })
+  if (!is.null(ext)) {
+    names(ext)[names(ext) == "ascvd"] <- "prevent_ascvd_10yr_ext"
+    if ("model" %in% names(ext))
+      names(ext)[names(ext) == "model"] <- "prevent_model_ext"
+    out <- out %>% left_join(ext, by = c("SEQN", "cycle"))
+  } else {
+    out$prevent_ascvd_10yr_ext <- NA_real_
+    out$prevent_model_ext      <- NA_character_
+  }
 
   # 30-YEAR PREVENT-ASCVD RISK. Needed only by the RQ10 replication, whose
   # cohort definition uses a 30-year threshold alongside the 10-year one.
@@ -1642,6 +1704,119 @@ prevent_missing_bounds <- local({
 ## more than it is worth. If it fails, the run continues and the two
 ## CSVs are absent, which build_supplement.py reports rather than
 ## silently omitting eTable 18.
+
+## ---------------------------------------------------------------------------
+## Round 6 (Dani): PREVENT base model vs base + HbA1c + UACR.
+##
+## The ask was to "assess incorporation of HbA1c and UACR where available".
+## They are available: in this cohort HbA1c is present for ~99.8% and UACR is
+## computable for ~99.3%, so the question is not whether the data support it.
+##
+## What changes is the risk estimate, and Figure 1's primary-prevention row
+## turns on a 10% threshold, so a different estimate moves people across it --
+## changing who carries <70 rather than <90, and in principle who carries a
+## goal at all. That makes this the same kind of interpretive dependency as the
+## row-precedence question the paper already reports a range for, which is why
+## it is reported rather than resolved.
+##
+## METHOD. The goal machinery reads prevent_ascvd_10yr and nothing else, so the
+## counterfactual is exact: swap the extended estimate into that column and run
+## assign_goals() again. No part of the rule is reimplemented here.
+##
+## The social deprivation index, PREVENT's third optional predictor, needs a
+## ZIP code the public-use files do not release. This is base + HbA1c + UACR.
+prevent_extended_sensitivity <- tryCatch(local({
+  base <- derive_vars(primary_raw) %>%
+    filter(
+      RIDAGEYR >= CONFIG$age_min, RIDAGEYR <= CONFIG$age_max,
+      pregnant == 0, ascvd_hx == 0,
+      !is.na(LBXAPB), !is.na(ldl_primary), !is.na(LBXTR),
+      WTSAF2YR > 0
+    ) %>%
+    compute_prevent_risk()
+
+  if (all(is.na(base$prevent_ascvd_10yr_ext))) {
+    message("Extended-model sensitivity SKIPPED: no extended risk was scored.")
+    return(NULL)
+  }
+
+  ## Restrict to the analytic cohort -- adults the BASE model could score --
+  ## so the comparison is between two scores on one population, not between
+  ## two populations.
+  base <- base %>% filter(!is.na(prevent_ascvd_10yr))
+  n_analytic <- nrow(base)
+  n_ext_ok   <- sum(!is.na(base$prevent_ascvd_10yr_ext))
+
+  wt <- function(d) d %>%
+    mutate(n_cycles_pooled = length(primary_suffixes_used),
+           wt_pooled = WTSAF2YR / n_cycles_pooled)
+
+  a_base <- assign_goals(base) %>% wt()
+  a_ext  <- base %>%
+    mutate(prevent_ascvd_10yr = coalesce(prevent_ascvd_10yr_ext,
+                                         prevent_ascvd_10yr)) %>%
+    assign_goals() %>% wt()
+
+  stopifnot(nrow(a_base) == nrow(a_ext),
+            identical(a_base$SEQN, a_ext$SEQN))
+
+  ## Domain estimation, as everywhere else in this analysis: the design is
+  ## built on the whole frame and the subgroup reached with subset() on the
+  ## DESIGN, not by handing svydesign() an already-filtered data frame.
+  ## Doing the latter here would compute the discordance rows by the very
+  ## method CONFIG$use_domain_design was set TRUE to retire, and the
+  ## sensitivity would not be comparable with the estimates it is
+  ## sensitivity to.
+  des <- function(d) svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA,
+                               weights = ~wt_pooled, data = d, nest = TRUE)
+  pull <- function(design, f) {
+    ci <- svyciprop(f, design, method = "beta", na.rm = TRUE)
+    c(100 * as.numeric(ci), 100 * attr(ci, "ci")[1], 100 * attr(ci, "ci")[2])
+  }
+  des_base <- des(a_base)
+  des_ext  <- des(a_ext)
+  g_base <- pull(des_base, ~I(has_apob_goal == 1))
+  g_ext  <- pull(des_ext,  ~I(has_apob_goal == 1))
+  d_base <- pull(subset(des_base, has_apob_goal == 1), ~I(discordant == 1))
+  d_ext  <- pull(subset(des_ext,  has_apob_goal == 1), ~I(discordant == 1))
+
+  moved_in  <- sum(a_ext$has_apob_goal == 1 & a_base$has_apob_goal == 0)
+  moved_out <- sum(a_ext$has_apob_goal == 0 & a_base$has_apob_goal == 1)
+  tighter   <- sum(coalesce(a_ext$apob_goal < a_base$apob_goal, FALSE))
+  looser    <- sum(coalesce(a_ext$apob_goal > a_base$apob_goal, FALSE))
+
+  out <- tibble(
+    quantity = c("Goal-assigned share", "Goal-assigned share",
+                 "Discordance among goal-assigned", "Discordance among goal-assigned"),
+    prevent_model = c("Base (as reported)", "Base + HbA1c + UACR",
+                      "Base (as reported)", "Base + HbA1c + UACR"),
+    pct_weighted = c(g_base[1], g_ext[1], d_base[1], d_ext[1]),
+    ci_low       = c(g_base[2], g_ext[2], d_base[2], d_ext[2]),
+    ci_high      = c(g_base[3], g_ext[3], d_base[3], d_ext[3]),
+    n_analytic   = n_analytic,
+    n_ext_scored = n_ext_ok,
+    n_gained_goal = moved_in,
+    n_lost_goal   = moved_out,
+    n_goal_tightened = tighter,
+    n_goal_loosened  = looser,
+    ci_method = "korn-graubard")
+  write.csv(out, "r6_prevent_extended_model.csv", row.names = FALSE)
+
+  message("\nPREVENT extended-model sensitivity (base vs base + HbA1c + UACR):")
+  message("  analytic cohort: ", n_analytic, "; extended risk scored for ", n_ext_ok)
+  message(sprintf("  goal-assigned share : %.2f%% base vs %.2f%% extended",
+                  g_base[1], g_ext[1]))
+  message(sprintf("  discordance         : %.2f%% base vs %.2f%% extended",
+                  d_base[1], d_ext[1]))
+  message("  gained a goal: ", moved_in, " | lost a goal: ", moved_out,
+          " | goal tightened: ", tighter, " | loosened: ", looser)
+  out
+}), error = function(e) {
+  message("*** Extended-model sensitivity FAILED: ", conditionMessage(e),
+          "\n    The run continues; r6_prevent_extended_model.csv was not written.")
+  NULL
+})
+
 prevent_input_ranges <- tryCatch(local({
   elig <- derive_vars(primary_raw) %>%
     filter(

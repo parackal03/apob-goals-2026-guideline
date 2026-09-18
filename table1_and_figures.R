@@ -370,6 +370,24 @@ if ("LBXAPB_raw" %in% names(primary_df)) {
   cy$scale <- factor(cy$scale, levels = c("Uncalibrated", "Calibrated"))
   cy <- cy[order(cy$scale), ]
 
+  ## Round-6 audit: the eFigure 2 note quotes the endpoint cycle means and
+  ## the range across cycles, and those numbers existed only in the console
+  ## log. One of them ("spread falls from 9.24 to 3.46") was stale and
+  ## nothing could have caught it, because there was nothing to check it
+  ## against. Written out so the supplement can be built from a file and
+  ## guarded like every other quoted value.
+  cyc_out <- cy[, c("scale", "cycle", "years", "mean", "lo", "hi")]
+  cyc_out$mean <- as.numeric(cyc_out$mean)
+  write.csv(cyc_out, "rq3_apob_by_cycle_calibration.csv", row.names = FALSE)
+  .rng <- tapply(cyc_out$mean, cyc_out$scale, function(v) max(v) - min(v))
+  write.csv(data.frame(scale = names(.rng),
+                       range_mg_dl = as.numeric(.rng),
+                       min_mg_dl = as.numeric(tapply(cyc_out$mean, cyc_out$scale, min)),
+                       max_mg_dl = as.numeric(tapply(cyc_out$mean, cyc_out$scale, max))),
+            "rq3_apob_cycle_range.csv", row.names = FALSE)
+  message("apoB cycle means written; range across cycles: ",
+          paste(sprintf("%s %.2f", names(.rng), .rng), collapse = " | "))
+
   pS1 <- ggplot(cy, aes(years, mean, group = scale, colour = scale, shape = scale)) +
     geom_line(aes(linetype = scale), linewidth = 0.6) +
     geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.1, linewidth = 0.5) +

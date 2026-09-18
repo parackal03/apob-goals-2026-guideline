@@ -106,7 +106,12 @@ pw_design <- update(
 )
 
 .pw <- c(pw_diabetes  = "Diabetes",
-         pw_hypertrig = "Hypertriglyceridaemia (TG 150-499)",
+         ## Round-6 audit: pw_hypertrig is !is.na(g_htg_apob), and
+         ## g_htg_apob keys on `hypertrig` = TG >= 150 with NO upper bound.
+         ## The "(TG 150-499)" label was the PRIMARY-PREVENTION row's band
+         ## (tg_in_goal_band) attached to the wrong row, and it propagated
+         ## into Table 3 and its footnote.
+         pw_hypertrig = "Hypertriglyceridaemia (TG >=150, age 40-75, >=1 RF)",
          pw_primary   = "Primary prevention by PREVENT risk")
 
 ## For each pathway: how many goal-assigned adults it applies to, and of those
