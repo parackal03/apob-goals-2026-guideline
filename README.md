@@ -138,16 +138,16 @@ build; the error message gives the full command.
 
 | Script | Lines | Purpose |
 |---|---|---|
-| `run_all.R` | 154 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt` |
-| `nhanes_apob_analysis.R` | 3864 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~40 CSVs |
-| `precedence_and_model_analyses.R` | 711 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
+| `run_all.R` | 178 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
+| `nhanes_apob_analysis.R` | 4177 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~45 CSVs (including the goal-assignment bounds for adults PREVENT cannot score, and the PREVENT input-range diagnostic) |
+| `precedence_and_model_analyses.R` | 712 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
 | `precedence_diagnostics.R` | 142 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
 | `verify_run.R` | 429 | 29 independent checks: convergence, separation, goal-cell consistency, survey design sanity, NCHS presentation standards, cycle influence, mortality event counts, config provenance |
 | `table1_and_figures.R` | 398 | Baseline characteristics table and the figures |
-| `pathway_and_sensitivity_analyses.R` | 547 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
+| `pathway_and_sensitivity_analyses.R` | 639 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
 | `compare_blind_coding.R` | 224 | Agreement, Cohen's kappa, weighted kappa, and the effect of coding differences on the headline estimates |
 | `export_blind_dataset.R` | 115 | Builds the de-identified dataset released to the independent coder, guarding against 24 forbidden column patterns |
-| `cohort_definition_diagnostics.R` | 184 | What the LDL-C eligibility filter excludes, and the hypertension definition under first-reading versus averaged blood pressure |
+| `cohort_definition_diagnostics.R` | 185 | What the LDL-C eligibility filter excludes, and the hypertension definition under first-reading versus averaged blood pressure |
 
 ---
 
@@ -164,6 +164,10 @@ re-source, and every result updates.
 | `apply_apob_calibration` | `TRUE` |
 | `htn_counts_treatment` | `TRUE` |
 | `ascvd_ckd_ldl55` | `TRUE` |
+| `ascvd_ckd_very_high` | `TRUE` |
+| `strict_goal_boundaries` | `TRUE` |
+| `use_domain_design` | `TRUE` |
+| `ascvd_rf_age_sex_specific` | `FALSE` |
 | `tg_threshold` | `150` mg/dL |
 | `apob_high_threshold` | `130` mg/dL |
 | `prevent_goal_high_risk_cut` | `0.10` |
@@ -196,13 +200,28 @@ the sensitivity comparison, and a most-lenient variant as `apob_goal_lenient`.
 One branch sits outside the per-row columns. Figure 1 places a "With CKD"
 bullet in the <55 mg/dL column of the Clinical ASCVD row, so chronic kidney
 disease is a second route into that column for adults with established ASCVD.
-`g_ascvd_ldl` implements it under `CONFIG$ascvd_ckd_ldl55`; `g_ascvd_apob` is
-deliberately **not** modified, because the apoB <55 value is stated under "At
-very high risk" alone, and reading it otherwise would require inferring
-very-high-risk status from CKD, which the figure does not say. Setting the flag
-to `FALSE` reproduces the superseded mapping exactly. A diagnostic block prints
-how many adults moved, and `stopifnot()` asserts that no primary-prevention row
-and no apoB goal was touched.
+Two flags govern it, and they are not the same question:
+
+- `CONFIG$ascvd_ckd_ldl55` (`TRUE`) carries the **LDL-C** goal through
+  `g_ascvd_ldl`.
+- `CONFIG$ascvd_ckd_very_high` (`TRUE`) treats established ASCVD with CKD as
+  **very high risk**, which is what carries the apoB <55 goal.
+
+The second flag was added on 10 September 2026 after the guideline was
+adjudicated against the PDF, and the document is not self-consistent: Figure 1
+and Figure 11 support it, Figure 10 can be read against it. Both readings are
+recorded in the `CONFIG` comment, and `TRUE` is adopted as primary. Setting
+either flag to `FALSE` reproduces the corresponding superseded mapping exactly.
+
+The scope is **secondary prevention only**. Primary prevention excludes
+`ascvd_hx == 1` before goals are assigned, so no primary-prevention estimate can
+move; `verify_run.R` asserts this. A diagnostic block prints how many adults the
+CKD route carried in, how many of those it newly assigned a goal to, and how
+many already had one and were tightened.
+
+> An earlier version of this file said `g_ascvd_apob` is "deliberately not
+> modified" and that inferring very-high-risk status from CKD would go beyond
+> the figure. That was the pre-10-September reading and is superseded.
 
 **2. ApoB cross-instrument calibration — `derive_vars()`.**
 
@@ -259,13 +278,46 @@ Figure 1, which was checked by independent double-coding — see
 
 ---
 
+## Freezing a version for submission
+
+The repository is tagged at the exact state that produced the submitted
+numbers, so a reader can fetch that state rather than whatever `main` has
+drifted to.
+
+1. Run the pipeline end to end in a clean session (`source("run_all.R")`). This
+   writes `run_log_<date>_<time>.txt`, `session_info.txt` and
+   `session_packages.csv` alongside the CSVs.
+2. Confirm `verify_run.R` reports no failures, and that
+   `session_packages.csv` matches the versions table above. Where it does not,
+   correct the table rather than the file — the file is what actually ran.
+3. Rebuild the manuscript and Supplement. Both builds refuse to proceed if any
+   figure they quote is older than `verification_report.csv`, so a stale number
+   cannot reach the submitted documents.
+4. `source("make_repo.R")` to refresh `github_repo/`, then push.
+5. Fill `version`, `date-released` and, once minted, `doi` in `CITATION.cff`,
+   which carries them as commented placeholders.
+6. Cut a GitHub release on that commit. On acceptance, connect the repository
+   to Zenodo and re-release to mint the DOI the Data Sharing Statement promises.
+
+Steps 1 to 3 are the ones that matter: the tag is only worth having if the
+state it names is the state that produced the numbers.
+
+---
+
 ## Known limitations of the code
 
-Cohort filters are applied before `svydesign()` rather than by subsetting a
-full-file design. Subpopulation analyses within the cohort **do** use
-`subset()`, which is what matters for the apoB estimates, but the
-cohort-construction step departs from strict NCHS practice and has not been
-tested against the alternative.
+Domain estimation is used: the design object is built on the full file and
+the analytic cohort is reached with `subset()`, so records outside the domain
+still inform the variance through their strata and PSUs. This is
+`CONFIG$use_domain_design`, `TRUE` since the round-4 corrections; setting it to
+`FALSE` reproduces the superseded behaviour, `svydesign()` on an
+already-filtered data frame. Section 0b computes both and prints the comparison,
+so the claim that point estimates are unchanged and standard errors differ only
+where filtering emptied a PSU is reported rather than asserted.
+
+> An earlier version of this file listed the pre-round-4 behaviour here as a
+> known limitation — filters applied before `svydesign()`, "not been tested
+> against the alternative". Both halves of that are now out of date.
 
 Firth penalisation is not implemented for complex survey designs. Its intervals
 are not design-based and are point-estimate sensitivities only.

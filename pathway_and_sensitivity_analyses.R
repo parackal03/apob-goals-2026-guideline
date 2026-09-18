@@ -165,6 +165,34 @@ print(as.data.frame(ov))
 message("  Goal-assigned adults matching more than one pathway: ",
         sum(ov$n_unweighted[ov$n_pathways > 1]), " of ", sum(ov$n_unweighted))
 
+## ---------------------------------------------------------------------------
+## A3 (round 6): the one-row / more-than-one-row split, SURVEY WEIGHTED.
+##
+## Table 3 printed 47.1% and 52.9% here. Those are unweighted -- 1,567 and
+## 1,757 divided by 3,324 -- sitting in a column of otherwise survey-weighted
+## percentages, which is exactly the mixing round 6 asked us to stop. Recomputed
+## as weighted proportions with Korn-Graubard intervals, matching every other
+## percentage in that table.
+pw_design <- update(pw_design,
+                    multi_row = as.integer((pw_diabetes + pw_hypertrig +
+                                            pw_primary) > 1))
+.multi <- svyciprop(~I(multi_row == 1), pw_design, method = "beta", na.rm = TRUE)
+.one   <- svyciprop(~I(multi_row == 0), pw_design, method = "beta", na.rm = TRUE)
+rows_matched <- tibble(
+  rows_matched   = c("One row only", "More than one row"),
+  n_unweighted   = c(sum(pw_design$variables$multi_row == 0, na.rm = TRUE),
+                     sum(pw_design$variables$multi_row == 1, na.rm = TRUE)),
+  pct_weighted   = 100 * c(as.numeric(.one),  as.numeric(.multi)),
+  ci_low         = 100 * c(attr(.one, "ci")[1], attr(.multi, "ci")[1]),
+  ci_high        = 100 * c(attr(.one, "ci")[2], attr(.multi, "ci")[2]),
+  ci_method      = "korn-graubard")
+OUT(rows_matched, "r4a_rows_matched_weighted.csv")
+print(as.data.frame(rows_matched))
+message("  Rows matched per adult, survey weighted: one row ",
+        sprintf("%.1f%%", rows_matched$pct_weighted[1]),
+        ", more than one ", sprintf("%.1f%%", rows_matched$pct_weighted[2]),
+        "  (unweighted were 47.1% and 52.9%)")
+
 ## -----------------------------------------------------------------------------
 ## R4a, secondary-prevention arm.
 ##
@@ -548,3 +576,64 @@ message("  Report this as it comes out. A shift here belongs in the ",
 message("\n=== ROUND 4 ANALYSES COMPLETE ===")
 message(length(.written), " file(s) written:")
 for (f in .written) message("  - ", f)
+
+## ---------------------------------------------------------------------------
+## B2 (round 6): SEVERE HYPERTRIGLYCERIDAEMIA AND THE DISCORDANT GROUP
+##
+## Eight of the 77 discordant adults have triglycerides above 800 mg/dL. At
+## those levels the lipid panel behaves differently -- apoB rises with particle
+## number in a way that is not the atherogenic picture the goal framework is
+## aimed at, and calculated LDL-C is least reliable. If a tenth of the
+## discordant group sits there, a reviewer will want to know the finding is not
+## carried by them.
+##
+## Reported on the SAME three quantities as the main analysis, so the
+## comparison is like for like: apoB non-attainment among goal-assigned adults,
+## overall discordance, and discordance among those at their LDL-C goal.
+local({
+  TG_CUT <- 800
+  base <- apob_design
+  keep <- subset(base, coalesce(LBXTR <= TG_CUT, TRUE))
+
+  n_excl <- sum(coalesce(base$variables$LBXTR > TG_CUT, FALSE), na.rm = TRUE)
+  n_excl_disc <- sum(coalesce(base$variables$LBXTR > TG_CUT, FALSE) &
+                     coalesce(base$variables$discordant == 1, FALSE),
+                     na.rm = TRUE)
+
+  q <- function(d, f) {
+    ci <- svyciprop(f, d, method = "beta", na.rm = TRUE)
+    c(100 * as.numeric(ci), 100 * attr(ci, "ci")[1], 100 * attr(ci, "ci")[2])
+  }
+  atldl      <- subset(base, at_ldl_goal == 1)
+  atldl_keep <- subset(keep, at_ldl_goal == 1)
+
+  rows <- list(
+    c("ApoB non-attainment among goal-assigned",
+      q(base, ~I(above_apob_goal == 1)), q(keep, ~I(above_apob_goal == 1))),
+    c("Discordance among goal-assigned",
+      q(base, ~I(discordant == 1)),      q(keep, ~I(discordant == 1))),
+    c("Discordance among those at LDL-C goal",
+      q(atldl, ~I(above_apob_goal == 1)),
+      q(atldl_keep, ~I(above_apob_goal == 1))))
+
+  out <- tibble(
+    quantity     = vapply(rows, function(r) r[1], character(1)),
+    all_pct      = as.numeric(vapply(rows, function(r) r[2], character(1))),
+    all_lo       = as.numeric(vapply(rows, function(r) r[3], character(1))),
+    all_hi       = as.numeric(vapply(rows, function(r) r[4], character(1))),
+    excl_pct     = as.numeric(vapply(rows, function(r) r[5], character(1))),
+    excl_lo      = as.numeric(vapply(rows, function(r) r[6], character(1))),
+    excl_hi      = as.numeric(vapply(rows, function(r) r[7], character(1))),
+    tg_cut       = TG_CUT,
+    n_excluded   = n_excl,
+    n_excluded_discordant = n_excl_disc,
+    ci_method    = "korn-graubard")
+  OUT(out, "r6_tg800_sensitivity.csv")
+  print(as.data.frame(out))
+  message("\nB2 excluding triglycerides > ", TG_CUT, " mg/dL: ", n_excl,
+          " goal-assigned adults removed, of whom ", n_excl_disc,
+          " were discordant.")
+  for (i in seq_len(nrow(out)))
+    message("  ", format(out$quantity[i], width = 40),
+            sprintf("%6.2f%% -> %6.2f%%", out$all_pct[i], out$excl_pct[i]))
+})

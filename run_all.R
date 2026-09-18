@@ -149,6 +149,31 @@ run_all <- function(
     }
   }
 
+  ## ---- session and package provenance -----------------------------------
+  ## Round-6 (Dani): "preserve package/session information". The README lists
+  ## the versions this analysis was developed against; this records the ones
+  ## that actually produced THIS run, next to its outputs, so a reader can see
+  ## whether their environment differs from the submitted one rather than
+  ## having to trust a table written by hand.
+  si <- utils::sessionInfo()
+  writeLines(utils::capture.output(print(si)), "session_info.txt")
+
+  pk <- c("survey", "srvyr", "dplyr", "tidyr", "purrr", "haven", "ggplot2",
+          "readr", "preventr", "tibble", "scales")
+  pk <- pk[vapply(pk, requireNamespace, logical(1), quietly = TRUE)]
+  vers <- data.frame(
+    package = pk,
+    version = vapply(pk, function(x) as.character(utils::packageVersion(x)), ""),
+    stringsAsFactors = FALSE)
+  vers <- rbind(data.frame(package = "R",
+                           version = paste(R.version$major, R.version$minor,
+                                           sep = "."),
+                           stringsAsFactors = FALSE),
+                vers)
+  write.csv(vers, "session_packages.csv", row.names = FALSE)
+  cat("\nEnvironment written to session_info.txt and session_packages.csv\n")
+  print(vers, row.names = FALSE)
+
   invisible(timings)
 }
 

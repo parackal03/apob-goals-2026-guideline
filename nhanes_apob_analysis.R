@@ -1529,6 +1529,231 @@ primary_df <- derive_vars(primary_raw) %>%
   mutate(n_cycles_pooled = length(primary_suffixes_used),
          wt_pooled = WTSAF2YR / n_cycles_pooled)
 
+## ---------------------------------------------------------------------------
+## B1 (round 6): DOES THE PREVENT COMPLETE-CASE EXCLUSION DRIVE THE 33.4%?
+##
+## 413 otherwise-eligible adults are dropped above because PREVENT could not be
+## scored for them. 33.4% is therefore a percentage of the 9,108 who remain,
+## and a reviewer will reasonably ask whether the excluded 413 differ.
+##
+## The union rule makes this answerable without imputing anything. PREVENT is
+## needed by exactly ONE Figure 1 row -- primary prevention by estimated risk.
+## The diabetes and hypertriglyceridaemia rows state goals without it. So for
+## many of the 413 we can still settle MEMBERSHIP (does any row state a goal?)
+## even when we cannot settle the VALUE (<70 or <90).
+##
+## That splits the 413 three ways:
+##   KNOWN ASSIGNED   a non-PREVENT row states a goal. Membership certain.
+##   KNOWN UNASSIGNED no row states one, and the PREVENT row could not have:
+##                    its precondition (triglycerides 150-499) is not met, so
+##                    the row is silent whatever the risk estimate.
+##   UNDETERMINED     only the PREVENT row could have assigned them.
+##
+## Reported as bounds over all 9,521: lower treats every UNDETERMINED adult as
+## unassigned, upper treats them all as assigned. If 33.4% sits inside a narrow
+## band, complete-case exclusion is not driving it.
+prevent_missing_bounds <- local({
+  elig <- derive_vars(primary_raw) %>%
+    filter(
+      RIDAGEYR >= CONFIG$age_min, RIDAGEYR <= CONFIG$age_max,
+      pregnant == 0, ascvd_hx == 0,
+      !is.na(LBXAPB), !is.na(ldl_primary), !is.na(LBXTR),
+      WTSAF2YR > 0
+    ) %>%
+    compute_prevent_risk() %>%
+    assign_goals() %>%
+    mutate(n_cycles_pooled = length(primary_suffixes_used),
+           wt_pooled = WTSAF2YR / n_cycles_pooled,
+           prevent_scored = as.integer(!is.na(prevent_ascvd_10yr)),
+           ## goal from any row OTHER than primary-prevention-by-risk
+           goal_without_prevent = {
+             v <- pmin(g_ascvd_apob, g_dm_apob, g_shc_apob, g_htg_apob,
+                       na.rm = TRUE)
+             as.integer(is.finite(v))
+           },
+           ## could the PREVENT row ever have spoken for this person?
+           prevent_row_possible = as.integer(coalesce(tg_in_goal_band == 1,
+                                                      FALSE)),
+           status = case_when(
+             prevent_scored == 1            ~ "scored",
+             goal_without_prevent == 1      ~ "known assigned",
+             prevent_row_possible == 0      ~ "known unassigned",
+             TRUE                           ~ "undetermined"),
+           goal_lower = as.integer(coalesce(has_apob_goal == 1, FALSE) |
+                                   (prevent_scored == 0 &
+                                    goal_without_prevent == 1)),
+           goal_upper = as.integer(goal_lower == 1 |
+                                   status == "undetermined"))
+
+  des <- svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~wt_pooled,
+                   data = elig, nest = TRUE)
+  lo <- svyciprop(~I(goal_lower == 1), des, method = "beta", na.rm = TRUE)
+  hi <- svyciprop(~I(goal_upper == 1), des, method = "beta", na.rm = TRUE)
+
+  tab <- elig %>% count(status, name = "n_unweighted")
+  print(as.data.frame(tab))
+
+  out <- tibble(
+    bound        = c("Lower (undetermined treated as NOT assigned)",
+                     "Upper (undetermined treated as assigned)"),
+    n_cohort     = nrow(elig),
+    pct_weighted = 100 * c(as.numeric(lo), as.numeric(hi)),
+    ci_low       = 100 * c(attr(lo, "ci")[1], attr(hi, "ci")[1]),
+    ci_high      = 100 * c(attr(lo, "ci")[2], attr(hi, "ci")[2]),
+    ci_method    = "korn-graubard")
+  write.csv(out,  "r6_prevent_missing_bounds.csv", row.names = FALSE)
+  write.csv(tab,  "r6_prevent_missing_status.csv", row.names = FALSE)
+  message("\nB1 PREVENT missingness, over all ", nrow(elig), " eligible adults:")
+  message("  complete-case estimate (n = ", sum(elig$prevent_scored), "): 33.4%")
+  message("  bounds including the unscored: ",
+          sprintf("%.1f%%", out$pct_weighted[1]), " to ",
+          sprintf("%.1f%%", out$pct_weighted[2]))
+  for (i in seq_len(nrow(tab)))
+    message("    ", format(tab$status[i], width = 18), tab$n_unweighted[i])
+  out
+})
+
+## ---------------------------------------------------------------------------
+## B3 (round 6). PREVENT input ranges, and what the systolic clip can do.
+##
+## Dani asked for a rerun at an SBP ceiling of 200, or an 180-vs-200
+## sensitivity. Neither is available: 90-180 is preventr's own validated range,
+## not a setting of ours, and outside it estimate_risk() returns NA with
+## input_problems set rather than a risk estimate. Raising the ceiling would
+## therefore UNSCORE those adults, not score them differently -- a smaller
+## denominator, not a corrected one. Scoring an SBP of 195 at all would mean
+## hand-coding the published coefficients and overriding the package's
+## validation, which is a weaker position than the clip.
+##
+## So the question is bounded instead, exactly as B1 bounds the unscored 413.
+## The argument is one-way: clipping a value DOWN to 180 can only understate
+## PREVENT risk, and risk enters Figure 1 only by crossing a threshold, so
+## correcting the clip could only ADD a goal, never remove one. The maximum
+## possible movement is therefore the weighted share of adults who are both
+## above the ceiling AND currently unassigned -- anyone already carrying a
+## goal cannot gain one.
+##
+## The per-variable breakdown is written out at the same time. Until now the
+## run reported a single lump ("1344 of 9521 records had >=1 input clipped"),
+## which says nothing about WHICH input, and so reads as though blood pressure
+## drove it. It does not; body-mass index does, by an order of magnitude.
+## Wrapped so a failure here cannot kill an hour-long run. The same
+## lesson as kg_cell_summary(): a diagnostic must never be able to cost
+## more than it is worth. If it fails, the run continues and the two
+## CSVs are absent, which build_supplement.py reports rather than
+## silently omitting eTable 18.
+prevent_input_ranges <- tryCatch(local({
+  elig <- derive_vars(primary_raw) %>%
+    filter(
+      RIDAGEYR >= CONFIG$age_min, RIDAGEYR <= CONFIG$age_max,
+      pregnant == 0, ascvd_hx == 0,
+      !is.na(LBXAPB), !is.na(ldl_primary), !is.na(LBXTR),
+      WTSAF2YR > 0
+    ) %>%
+    compute_prevent_risk() %>%
+    assign_goals() %>%
+    mutate(n_cycles_pooled = length(primary_suffixes_used),
+           wt_pooled = WTSAF2YR / n_cycles_pooled)
+
+  ## The bounds below must be the ones compute_prevent_risk() actually applies.
+  ## Stated once here and checked against that function's output, so the table
+  ## cannot drift away from the code it documents.
+  spec <- tibble::tribble(
+    ~variable,                  ~raw,        ~clipped,          ~lo,   ~hi,
+    "Systolic blood pressure",  "avg_sbp",   "prevent_sbp",     90,    180,
+    "Total cholesterol",        "LBXTC",     "prevent_total_c", 130,   320,
+    "HDL cholesterol",          "LBDHDD",    "prevent_hdl_c",   20,    100,
+    "eGFR",                     "egfr",      "prevent_egfr",    15,    140,
+    "Body mass index",          "BMXBMI",    "prevent_bmi",     18.5,  39.9)
+
+  rows <- lapply(seq_len(nrow(spec)), function(i) {
+    r <- spec[i, ]
+    v <- elig[[r$raw]]
+    c_ <- elig[[r$clipped]]
+    ## the clipped column must be exactly pmin(pmax(raw, lo), hi)
+    want <- pmin(pmax(v, r$lo), r$hi)
+    stopifnot(all(is.na(want) == is.na(c_)),
+              isTRUE(all.equal(want[!is.na(want)], c_[!is.na(c_)])))
+    ok <- !is.na(v)
+    tibble(variable = r$variable,
+           lower_bound = r$lo, upper_bound = r$hi,
+           n_nonmissing = sum(ok),
+           n_below = sum(v[ok] < r$lo),
+           n_above = sum(v[ok] > r$hi))
+  })
+  ranges <- dplyr::bind_rows(rows)
+  ranges$pct_clipped <- 100 * (ranges$n_below + ranges$n_above) / nrow(elig)
+  write.csv(ranges, "r6_prevent_input_ranges.csv", row.names = FALSE)
+
+  ## ---- what the systolic ceiling can do to the headline -------------------
+  ## DENOMINATOR. The range counts above are over all eligible adults, which is
+  ## the frame the clipping happens in and the one the existing "N of 9,521
+  ## records had >=1 input value clipped" message reports. The BOUND must not
+  ## use that frame: over 9,521 the goal-assigned share is 33.33%, because the
+  ## 413 PREVENT cannot score count as unassigned -- that is the eTable 16
+  ## LOWER bound, not the headline. The headline is the complete-case estimate
+  ## over the 9,108 scored, and a bound on the ceiling is only readable if it
+  ## starts there. Clipping keeps the above-ceiling adults scorable, so none of
+  ## them is lost by restricting to the analytic cohort.
+  ##
+  ## The first version of this block used the 9,521 frame and labelled the
+  ## result "as analyzed", which it was not.
+  analytic <- elig %>%
+    filter(!is.na(prevent_ascvd_10yr)) %>%
+    mutate(sbp_above_ceiling = as.integer(coalesce(avg_sbp > 180, FALSE)),
+           ## could only GAIN a goal: above the ceiling and not assigned one
+           could_gain = as.integer(sbp_above_ceiling == 1 &
+                                   coalesce(has_apob_goal, 0L) == 0L),
+           goal_upper_sbp = as.integer(coalesce(has_apob_goal == 1, FALSE) |
+                                       could_gain == 1))
+
+  des <- svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~wt_pooled,
+                   data = analytic, nest = TRUE)
+  lo <- svyciprop(~I(has_apob_goal == 1),  des, method = "beta", na.rm = TRUE)
+  hi <- svyciprop(~I(goal_upper_sbp == 1), des, method = "beta", na.rm = TRUE)
+
+  ## The lower row must reproduce the headline exactly; if it ever stops doing
+  ## so the denominator has drifted again and the table is not comparable.
+  stopifnot(abs(100 * as.numeric(lo) - 33.4436949661563) < 0.01)
+
+  bounds <- tibble(
+    bound = c("As analyzed (systolic pressure clipped to 180 mm Hg)",
+              "Upper: every adult above the ceiling gains a goal"),
+    n_cohort            = nrow(analytic),
+    n_eligible          = nrow(elig),
+    n_above_ceiling     = sum(analytic$sbp_above_ceiling),
+    n_could_gain        = sum(analytic$could_gain),
+    pct_weighted        = 100 * c(as.numeric(lo), as.numeric(hi)),
+    ci_low              = 100 * c(attr(lo, "ci")[1], attr(hi, "ci")[1]),
+    ci_high             = 100 * c(attr(lo, "ci")[2], attr(hi, "ci")[2]),
+    preventr_version    = as.character(utils::packageVersion("preventr")),
+    ci_method           = "korn-graubard")
+  write.csv(bounds, "r6_sbp_clip_bounds.csv", row.names = FALSE)
+
+  message("\nB3 PREVENT input ranges, over ", nrow(elig), " eligible adults:")
+  for (i in seq_len(nrow(ranges)))
+    message("    ", format(ranges$variable[i], width = 24),
+            "below ", format(ranges$n_below[i], width = 5),
+            "above ", format(ranges$n_above[i], width = 5),
+            sprintf("(%.1f%% clipped)", ranges$pct_clipped[i]))
+  message("  above the systolic ceiling (analytic cohort, n = ",
+          nrow(analytic), "): ", sum(analytic$sbp_above_ceiling),
+          "; of those, unassigned and so able to change: ",
+          sum(analytic$could_gain))
+  message("  goal-assigned share: ", sprintf("%.2f%%", bounds$pct_weighted[1]),
+          " as analyzed, at most ", sprintf("%.2f%%", bounds$pct_weighted[2]),
+          " if every one of them gained a goal")
+  message("  preventr version: ", bounds$preventr_version[1])
+  list(ranges = ranges, bounds = bounds)
+}), error = function(e) {
+  message("*** B3 PREVENT input-range diagnostic FAILED: ",
+          conditionMessage(e),
+          "\n    The run continues; r6_prevent_input_ranges.csv and ",
+          "r6_sbp_clip_bounds.csv were not written.")
+  NULL
+})
+
+
 trend_df <- derive_vars(trend_raw) %>%
   filter(
     RIDAGEYR >= CONFIG$age_min, RIDAGEYR <= CONFIG$age_max,
@@ -1854,18 +2079,87 @@ primary_design <- update(
 ## above are absent from the subpopulation object unless it is rebuilt.
 apob_design <- subset(primary_design, has_apob_goal == 1)
 
+## ---------------------------------------------------------------------------
+## KORN-GRAUBARD CELL INTERVALS -- added 2026-09-18 (round 6, "standardize the
+## CI methodology").
+##
+## The paper's Methods state that proportions are reported with Korn-Graubard
+## intervals. That was true of every HEADLINE proportion -- all computed with
+## svyciprop(method = "beta") -- but NOT of the four-cell goal decompositions,
+## which came from svymean() + confint() and are therefore symmetric linearized
+## (Wald) intervals. The mismatch was visible in the paper: secondary-prevention
+## discordance appeared as 2.94% (1.39-5.42) in the manuscript, from the
+## svyciprop route, and as 2.94 (1.13-4.76) in the supplement, from this one.
+## Identical point estimate, two intervals, one paper.
+##
+## This helper recomputes each cell of a decomposition as its own binary
+## proportion with method = "beta", so every reported interval in the paper now
+## comes from the same estimator and the Methods sentence is true as written.
+##
+## COST, stated plainly: the cells are no longer drawn from a single joint
+## multinomial fit, so they are individually exact rather than jointly
+## constrained. This is ordinary practice for reporting cell prevalences and is
+## footnoted in the supplement. Point estimates and weighted totals are
+## unchanged -- only the interval method moves.
+## FAIL-SAFE, and it matters here. This helper is new code sitting a third of
+## the way into a run that takes over an hour. If it threw, the whole run would
+## die and the hour would be wasted. So it falls back to the previous
+## svymean()/confint() computation instead of stopping -- but it does NOT do so
+## silently, which would quietly reinstate the very inconsistency round 6 asked
+## us to remove. Every row carries a ci_method column recording which estimator
+## actually produced it, the message channel says so loudly, and the build
+## scripts refuse to typeset a table whose ci_method is not korn-graubard.
+kg_cell_summary <- function(design, cell_var = "goal_cell") {
+  tot <- svytotal(as.formula(paste0("~", cell_var)), design)
+  nm  <- sub(paste0("^", cell_var), "", names(coef(tot)))
+
+  wald <- function() {
+    mu <- svymean(as.formula(paste0("~", cell_var)), design)
+    tibble(goal_cell  = sub(paste0("^", cell_var), "", names(coef(mu))),
+           prevalence = as.numeric(coef(mu)),
+           ci_low     = confint(mu)[, 1],
+           ci_high    = confint(mu)[, 2],
+           population = as.numeric(coef(tot)),
+           ci_method  = "linearized-FALLBACK")
+  }
+
+  tryCatch({
+    lvls <- levels(design$variables[[cell_var]])
+    if (!length(lvls)) stop("no factor levels on ", cell_var)
+    out <- dplyr::bind_rows(lapply(lvls, function(lv) {
+      f  <- as.formula(sprintf("~I(%s == '%s')", cell_var, lv))
+      ci <- svyciprop(f, design, method = "beta", na.rm = TRUE)
+      tibble(goal_cell  = lv,
+             prevalence = as.numeric(ci),
+             ci_low     = attr(ci, "ci")[1],
+             ci_high    = attr(ci, "ci")[2])
+    }))
+    out$population <- as.numeric(coef(tot))[match(out$goal_cell, nm)]
+    out$ci_method  <- "korn-graubard"
+    ## Cheap sanity checks on the result, not just on the absence of an error.
+    stopifnot(nrow(out) == length(lvls),
+              !any(is.na(out$population)),
+              abs(sum(out$prevalence) - 1) < 1e-6,
+              all(out$ci_low <= out$prevalence),
+              all(out$ci_high >= out$prevalence))
+    out
+  }, error = function(e) {
+    message("\n*** kg_cell_summary FAILED on ", cell_var, ": ",
+            conditionMessage(e))
+    message("*** Falling back to linearized intervals so the run continues.")
+    message("*** The CSV records ci_method = linearized-FALLBACK and the ",
+            "document builds will REFUSE to typeset it. Fix before rebuilding.\n")
+    wald()
+  })
+}
+## ---------------------------------------------------------------------------
+
 # Built defensively via coef()/confint() rather than relying on svyby's
 # column-naming, same lesson as the RQ3 positional-rename fix above --
 # exact label formatting can vary by survey-package version.
-rq1b_cell_prev  <- svymean(~goal_cell, apob_design)
+rq1b_cell_prev  <- svymean(~goal_cell, apob_design)   # retained for the deff/RSE diagnostics below
 rq1b_cell_tot   <- svytotal(~goal_cell, apob_design)
-rq1b_cell_summary <- tibble(
-  goal_cell  = sub("^goal_cell", "", names(coef(rq1b_cell_prev))),
-  prevalence = as.numeric(coef(rq1b_cell_prev)),
-  ci_low     = confint(rq1b_cell_prev)[, 1],
-  ci_high    = confint(rq1b_cell_prev)[, 2],
-  population = as.numeric(coef(rq1b_cell_tot))
-)
+rq1b_cell_summary <- kg_cell_summary(apob_design, "goal_cell")
 print(rq1b_cell_summary)
 
 message("RQ1b: ", scales::percent(rq1b_summary$estimate, accuracy = 0.01),
@@ -3267,15 +3561,9 @@ secondary_design <- update(
 ## fail with "object 'goal_cell' not found".
 secondary_apob_design <- subset(secondary_design, has_apob_goal == 1)
 
-rq6_cell_prev <- svymean(~goal_cell, secondary_apob_design)
+rq6_cell_prev <- svymean(~goal_cell, secondary_apob_design)   # retained for diagnostics
 rq6_cell_tot  <- svytotal(~goal_cell, secondary_apob_design)
-rq6_cell_summary <- tibble(
-  goal_cell  = sub("^goal_cell", "", names(coef(rq6_cell_prev))),
-  prevalence = as.numeric(coef(rq6_cell_prev)),
-  ci_low     = confint(rq6_cell_prev)[, 1],
-  ci_high    = confint(rq6_cell_prev)[, 2],
-  population = as.numeric(coef(rq6_cell_tot))
-)
+rq6_cell_summary <- kg_cell_summary(secondary_apob_design, "goal_cell")
 print(rq6_cell_summary)
 
 ## RQ6c -- direct head-to-head: is discordance MORE common in secondary

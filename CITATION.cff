@@ -16,6 +16,7 @@ abstract: >-
   the most stringent value applies. No data are distributed; the NHANES cycles
   and the NCHS linked mortality files are downloaded from CDC at run time.
 type: software
+repository-code: "https://github.com/parackal03/apob-goals-2026-guideline"
 authors:
   - given-names: Vishal
     family-names: Parackal
@@ -28,6 +29,12 @@ authors:
       Division of Cardiology, Lahey Hospital and Medical Center,
       Beth Israel Lahey Health, Burlington, Massachusetts, USA
 license: MIT
+# Tagged for the JAMA Cardiology submission. The DOI stays commented out
+# below until Zenodo mints one, which happens when the release is cut with
+# the repository connected to Zenodo -- filling it in beforehand would
+# promise a resolver that does not yet resolve.
+version: "1.0.0"
+date-released: "2026-09-18"
 keywords:
   - apolipoprotein B
   - dyslipidemia
@@ -41,14 +48,10 @@ keywords:
 # ---------------------------------------------------------------------------
 # TO COMPLETE BEFORE, OR JUST AFTER, THE FIRST PUSH
 #
-#   repository-code: the GitHub URL, once the repository exists, e.g.
-#     repository-code: "https://github.com/<user>/<repo>"
-#
-#   version and date-released: fill these when you tag a release. Cutting a
-#     release is also what triggers Zenodo to mint the DOI the manuscript's
-#     Data Sharing Statement promises, e.g.
-#     version: "1.0.0"
-#     date-released: "2026-09-15"
+#   version and date-released: SET ABOVE for the submission tag. Bump
+#     version and date-released together if the submitted code changes.
+#     Cutting a release is also what triggers Zenodo to mint the DOI the
+#     manuscript's Data Sharing Statement promises.
 #
 #   doi: the Zenodo DOI, once minted.
 #
