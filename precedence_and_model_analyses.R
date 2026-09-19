@@ -416,6 +416,104 @@ message("\n  Use the third row if the abstract says 'US adults aged 30-79'. ",
         "Use the first row if it says 'adults without established ASCVD'. ",
         "Do not mix them.")
 
+## -----------------------------------------------------------------------------
+## R2b. THE COMBINED DENOMINATOR, BY READING OF FIGURE 1  (round-6 audit)
+##
+## R2 above computes the combined share under the main reading only, and the
+## manuscript carried it as a point estimate with an em dash where every other
+## goal-assignment number in the paper carries its interpretive range. The
+## combined estimate is not independent of that reading: 3,324 of the 4,174
+## adults in its numerator, 80%, are assigned within primary prevention, where
+## R1 shows the share moving from 15.7% to 33.4%. Reported without a range, next
+## to a primary row that has one, it reads as the sturdier of the two, which is
+## backwards.
+##
+## The secondary arm is held fixed across readings. The row-ordering question is
+## a question about the five rows as they apply to adults WITHOUT clinical
+## ASCVD; the clinical-ASCVD row cannot match within primary prevention (mean
+## influence 0.00 percentage points under first-match) and competes with nothing
+## within secondary prevention. The separate question -- whether the
+## clinical-ASCVD rows state a goal or leave one optional -- is not this range
+## and is deliberately not folded into it.
+## -----------------------------------------------------------------------------
+
+message("\n-- R2b. Combined denominator by reading --")
+
+## Map each reading onto the combined frame BY SEQN. combined_df is the two arms
+## stacked, so positions do not correspond to primary_df's.
+combined_indicator <- function(goal_vec) {
+  assigned <- setNames(as.integer(!is.na(goal_vec)), primary_df$SEQN)
+  ifelse(combined_df$.arm == "primary",
+         unname(assigned[as.character(combined_df$SEQN)]),
+         as.integer(combined_df$has_apob_goal == 1))
+}
+
+comb_est <- function(ind, label) {
+  d <- combined_design
+  d$variables$.hg <- ind
+  ci  <- svyciprop(~I(.hg == 1), d, method = "beta", na.rm = TRUE)
+  tot <- svytotal(~I(.hg == 1), d, na.rm = TRUE)
+  tibble(reading      = label,
+         n_with_goal  = sum(ind == 1, na.rm = TRUE),
+         n_total      = length(ind),
+         pct_weighted = 100 * as.numeric(ci),
+         ci_low       = 100 * confint(ci)[1],
+         ci_high      = 100 * confint(ci)[2],
+         us_adults_with_goal = as.numeric(tot)[2],
+         ci_method    = "korn-graubard")
+}
+
+den_by_reading <- bind_rows(
+  comb_est(combined_indicator(g_inter),
+           "Intersection - a goal only if every matched row states one"),
+  comb_est(combined_indicator(g_main),
+           "Sequential first-match, the ordering used in an earlier implementation"),
+  comb_est(combined_indicator(g_union),
+           "Union with most stringent value (primary analysis)")
+)
+
+## The union row IS the combined estimate R2 reports. If the two ever diverge
+## they are no longer the same quantity and the range cannot be printed beside
+## the point estimate, so stop rather than publish a mismatched pair.
+{
+  .u <- den_by_reading[grepl("^Union", den_by_reading$reading), ]
+  .r2 <- den[grepl("^ALL adults", den$denominator), ]
+  stopifnot(nrow(.u) == 1, nrow(.r2) == 1,
+            .u$n_with_goal == .r2$n_with_goal,
+            .u$n_total     == .r2$n_total,
+            abs(.u$pct_weighted - .r2$pct_weighted) < 1e-6)
+}
+
+## The first-match family, all 120 orderings. Point estimates only, as R1 does:
+## 120 orderings give 120 intervals and none of them is the reported estimate.
+perm_comb <- vapply(seq_len(nrow(perms)), function(i) {
+  d <- combined_design
+  d$variables$.hg <- combined_indicator(goal_under_order(pdf_rows, perms[i, ]))
+  as.numeric(svymean(~I(.hg == 1), d, na.rm = TRUE))[2]
+}, numeric(1))
+
+den_by_reading <- bind_rows(den_by_reading, tibble(
+  reading      = "Sequential first-match, across all 120 orderings",
+  n_with_goal  = NA_integer_,
+  n_total      = nrow(combined_df),
+  pct_weighted = NA_real_,
+  ci_low       = 100 * min(perm_comb),
+  ci_high      = 100 * max(perm_comb),
+  us_adults_with_goal = NA_real_,
+  ci_method    = "range of point estimates, not an interval"
+))
+
+OUT(den_by_reading, "rev2b_denominator_by_reading.csv")
+print(as.data.frame(den_by_reading))
+
+message(sprintf("  Range across readings, combined: %.1f%% to %.1f%%",
+                min(den_by_reading$pct_weighted, na.rm = TRUE),
+                max(den_by_reading$pct_weighted, na.rm = TRUE)))
+message(sprintf("  Range across readings, primary:  %.1f%% to %.1f%%",
+                100 * min(bounds$share), 100 * max(bounds$share)))
+message("  Table 2's combined row carries this range once this file exists; ",
+        "until then it states that it inherits the primary-prevention range.")
+
 ## =============================================================================
 ## R3. CORRELATES OF DISCORDANCE  (major comment 3)
 ##
