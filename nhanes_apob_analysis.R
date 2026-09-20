@@ -507,6 +507,129 @@ if (!requireNamespace("preventr", quietly = TRUE)) {
 }
 library(preventr)
 
+## =============================================================================
+## PREVENT SYSTOLIC INPUT CEILING  (round 7, Dani)
+## =============================================================================
+## preventr refuses a systolic pressure above 180 mm Hg. That is NOT the limit
+## of the equations. The package's own documentation for estimate_risk() says
+## so in as many words:
+##
+##   "Some may notice the upper limit is set to 180 mmHg here, whereas the
+##    PREVENT equations technically permit up to 200 mmHg. The Pooled Cohort
+##    Equations (PCEs) do this as well. I have restricted to 180 mmHg, as SBP
+##    beyond 180 mmHg constitutes hypertensive urgency (per AHA's own
+##    definitions) ... it would seem clinically unreasonable to engage with the
+##    PREVENT equations when someone has more pressing matters to address."
+##
+## So 180 is the package author's clinical judgement about when scoring is
+## worth doing, not a statement about where the model stops being defined. An
+## earlier version of this script and of the manuscript described it as the
+## equations' validated range. That was wrong and is corrected here and in the
+## Limitations.
+##
+## The restriction lives in one place: preventr:::valid$sbp, a named vector
+## read by check_range() via is_valid_sbp(). Nothing in the arithmetic depends
+## on it -- the coefficient table (preventr:::base_10yr) is a linear spline in
+## SBP above 110 mm Hg, so 190 uses the same term as 170.
+##
+## Raising it is therefore a one-number change to an input gate. It is done
+## ONCE, here, rather than inside compute_prevent_risk(), so that it is visible
+## at the top of the run and appears once in the log.
+##
+## THREE GUARDS, because silently rescoring a cohort at a different ceiling is
+## exactly the kind of change that must not happen by accident:
+##   1. the shipped value must be 180 -- if a future preventr ships something
+##      else, stop rather than assume;
+##   2. 200 must still be accepted and 205 still refused afterwards;
+##   3. a record inside the original range must score IDENTICALLY before and
+##      after, which is what proves this is a gate and not the arithmetic.
+## A failure of any of them stops the run.
+PREVENT_SBP_CAP <- 200
+
+local({
+  .orig <- preventr:::valid
+  if (.orig$sbp[["upper"]] != 180)
+    stop("\n\n  preventr:::valid$sbp upper is ", .orig$sbp[["upper"]],
+         ", not the shipped 180.\n",
+         "  Either the package changed or this session is already patched.\n",
+         "  Restart R. Do not proceed: the cohort would be scored at an\n",
+         "  unknown ceiling.\n", call. = FALSE)
+
+  .probe <- function(sbp) {
+    r <- try(estimate_risk(age = 60, sex = "male", sbp = sbp, bp_tx = FALSE,
+                           total_c = 200, hdl_c = 45, statin = FALSE,
+                           dm = FALSE, smoking = FALSE, egfr = 90, bmi = 28,
+                           time = "10", quiet = TRUE), silent = TRUE)
+    if (inherits(r, "try-error")) return(NULL)
+    as.data.frame(r)
+  }
+  .scored <- function(x) !is.null(x) && nrow(x) > 0 &&
+    any(vapply(x, function(cc) is.numeric(cc) && any(!is.na(cc)), logical(1)))
+
+  .before <- .probe(180)
+
+  .v <- .orig
+  .v$sbp["upper"] <- PREVENT_SBP_CAP
+  assignInNamespace("valid", .v, ns = "preventr")
+
+  .after <- .probe(180)
+  .hi    <- .probe(PREVENT_SBP_CAP)
+  .over  <- .probe(PREVENT_SBP_CAP + 5)
+
+  if (!identical(.before, .after))
+    stop("\n\n  Raising the preventr systolic ceiling CHANGED an in-range\n",
+         "  result (180 mm Hg scored differently before and after).\n",
+         "  The bound is not a pure input gate in this version. Stop.\n",
+         call. = FALSE)
+  if (!.scored(.hi) || .scored(.over))
+    stop("\n\n  After raising the ceiling, ", PREVENT_SBP_CAP,
+         " mm Hg must score and ", PREVENT_SBP_CAP + 5,
+         " must not. It did not behave that way.\n", call. = FALSE)
+
+  message("PREVENT systolic ceiling raised from 180 to ", PREVENT_SBP_CAP,
+          " mm Hg (the equations' own limit).")
+  message("  verified: in-range scoring unchanged; ", PREVENT_SBP_CAP,
+          " accepted; ", PREVENT_SBP_CAP + 5, " still refused.")
+})
+
+
+## =============================================================================
+## RUN DIAGNOSTICS  (round 7)
+## =============================================================================
+## Several substantive counts quoted in the manuscript and Supplement -- the
+## Friedewald comparison arm, the RQ9 denominator, the mortality-linked deaths,
+## the adults the CKD route gains a goal for, the clipping count -- were only
+## ever printed to the console. Nothing wrote them to disk, so audit_numbers.py
+## could not check them and a rerun could move any of them in silence.
+##
+## That is not hypothetical: eMethods 2 quoted "1,344 of 9,521 records (14.1%)"
+## for a full round after the code had moved on, and it was found by tracing
+## percentages back to source by hand rather than by any check.
+##
+## DIAG() records a name and a value; the whole set is written to
+## run_diagnostics.csv at the end of the run. audit_numbers.py scans every CSV
+## in the folder, so these become checkable the moment the file exists. The
+## helper is deliberately trivial: a diagnostic must never be able to cost more
+## than it is worth.
+.RUN_DIAG <- new.env(parent = emptyenv())
+.RUN_DIAG$rows <- list()
+DIAG <- function(name, value, note = "") {
+  .RUN_DIAG$rows[[length(.RUN_DIAG$rows) + 1]] <-
+    data.frame(quantity = name, value = as.numeric(value),
+               note = note, stringsAsFactors = FALSE)
+  invisible(value)
+}
+write_run_diagnostics <- function(path = "run_diagnostics.csv") {
+  if (!length(.RUN_DIAG$rows)) {
+    message("No run diagnostics recorded; ", path, " not written.")
+    return(invisible(NULL))
+  }
+  out <- do.call(rbind, .RUN_DIAG$rows)
+  write.csv(out, path, row.names = FALSE)
+  message("wrote ", path, " (", nrow(out), " recorded quantities)")
+  invisible(out)
+}
+
 data_dir <- "nhanes_raw"
 dir.create(data_dir, showWarnings = FALSE)
 
@@ -973,17 +1096,26 @@ derive_vars <- function(df) {
 ## PREVENT-based numbers without further code changes, since they all
 ## reference these same column names.
 
-compute_prevent_risk <- function(df) {
-  # preventr's validated input ranges are narrower than NHANES's raw values in
-  # a small number of cases (BMI up to 39.9, SBP up to 180, eGFR up to 140).
-  # Per the AHA's own PREVENT FAQ, out-of-range values should be clipped to
-  # the nearest valid bound rather than dropped; n_clipped below makes that
-  # visible rather than silent.
+compute_prevent_risk <- function(df, extended = FALSE) {
+  # preventr's input ranges are narrower than NHANES's raw values in a small
+  # number of cases (BMI up to 39.9, eGFR up to 140, SBP up to
+  # PREVENT_SBP_CAP). Per the AHA's own PREVENT FAQ, out-of-range values
+  # should be clipped to the nearest valid bound rather than dropped;
+  # n_clipped below makes that visible rather than silent.
+  #
+  # ROUND 7. The systolic ceiling is PREVENT_SBP_CAP (200), the equations'
+  # own limit, not the 180 preventr ships. See the block beside library().
+  #
+  # ROUND 7, efficiency. `extended` gates the HbA1c/UACR scoring pass, which
+  # roughly doubles the cost of this function and is read in exactly one
+  # place -- the extended-model sensitivity block. Seven of the eight callers
+  # never look at those columns, so they no longer pay for them. The columns
+  # are still created, filled with NA, so every caller sees the same shape.
   clip <- function(x, lo, hi) pmin(pmax(x, lo), hi)
 
   df <- df %>%
     mutate(
-      prevent_sbp     = clip(avg_sbp, 90, 180),
+      prevent_sbp     = clip(avg_sbp, 90, PREVENT_SBP_CAP),
       prevent_total_c = clip(LBXTC,   130, 320),
       prevent_hdl_c   = clip(LBDHDD,  20, 100),
       prevent_egfr    = clip(egfr,    15, 140),
@@ -1045,6 +1177,41 @@ compute_prevent_risk <- function(df) {
   out <- df %>%
     left_join(scored %>% select(SEQN, cycle, prevent_ascvd_10yr = ascvd), by = c("SEQN", "cycle"))
 
+  ## ---- 180-mm-Hg COMPARISON SCORE  (round 7, Dani) --------------------
+  ## Dani asked for an 180-versus-200 sensitivity. The primary score above
+  ## now uses 200, so the comparison arm is the old 180 ceiling. Only the
+  ## records that actually exceed 180 can differ: below that the clipped
+  ## input is byte-identical, so rescoring them would burn minutes to
+  ## reproduce numbers we already have. Those records are scored again with
+  ## the systolic input held at 180; everyone else is copied across.
+  ##
+  ## This column is read ONLY by the B3 sensitivity block. No headline
+  ## depends on it.
+  out$prevent_ascvd_10yr_sbp180 <- out$prevent_ascvd_10yr
+  .hi_sbp <- scorable %>% filter(avg_sbp > 180)
+  if (nrow(.hi_sbp) > 0) {
+    .s180 <- estimate_risk(
+      use_dat = .hi_sbp %>%
+        transmute(
+          SEQN, cycle,
+          age = RIDAGEYR, sex = prevent_sex, sbp = 180,
+          bp_tx = as.logical(on_antihtn), total_c = prevent_total_c,
+          hdl_c = prevent_hdl_c, statin = as.logical(on_statin),
+          dm = as.logical(diabetes), smoking = as.logical(current_smoker),
+          egfr = prevent_egfr, bmi = prevent_bmi
+        ),
+      time = "10yr", quiet = TRUE)
+    .map <- setNames(.s180$ascvd, paste(.s180$SEQN, .s180$cycle))
+    .k   <- paste(out$SEQN, out$cycle)
+    .hit <- .k %in% names(.map)
+    out$prevent_ascvd_10yr_sbp180[.hit] <- unname(.map[.k[.hit]])
+    message("Systolic sensitivity: ", nrow(.hi_sbp),
+            " scorable records exceed 180 mm Hg (",
+            sum(.hi_sbp$avg_sbp > PREVENT_SBP_CAP), " exceed ",
+            PREVENT_SBP_CAP, " and are clipped there); ",
+            "rescored at 180 for the comparison arm.")
+  }
+
   ## ---- EXTENDED-MODEL 10-YEAR RISK (round 6, Dani) --------------------
   ## Dani asked us to assess incorporating HbA1c and UACR. They are not a
   ## correction to the base score, they are a different score: PREVENT's
@@ -1057,7 +1224,7 @@ compute_prevent_risk <- function(df) {
   ## Scored into its own column. NOTHING downstream reads it except the
   ## sensitivity block, so the primary analysis is untouched whatever this
   ## returns. Wrapped so a failure costs a message, not the run.
-  ext <- tryCatch({
+  ext <- if (!isTRUE(extended)) NULL else tryCatch({
     have <- !is.na(scorable$prevent_hba1c) | !is.na(scorable$prevent_uacr)
     message("Extended PREVENT inputs available for ", sum(have), " of ",
             nrow(scorable), " scorable records (HbA1c ",
@@ -1609,11 +1776,32 @@ primary_df <- derive_vars(primary_raw) %>%
 ##   KNOWN UNASSIGNED no row states one, and the PREVENT row could not have:
 ##                    its precondition (triglycerides 150-499) is not met, so
 ##                    the row is silent whatever the risk estimate.
-##   UNDETERMINED     only the PREVENT row could have assigned them.
+##   ASSIGNED, VALUE UNKNOWN
+##                    only the PREVENT row could have assigned them -- and it
+##                    DOES assign them. See below.
 ##
-## Reported as bounds over all 9,521: lower treats every UNDETERMINED adult as
-## unassigned, upper treats them all as assigned. If 33.4% sits inside a narrow
-## band, complete-case exclusion is not driving it.
+## ROUND 7 CORRECTION (Dani). The third group was previously called
+## UNDETERMINED and treated as a membership question, with the share over 9,521
+## reported as a bound. That was wrong, and the error is visible in this
+## script's own definition of the row:
+##
+##   g_pp_apob = case_when(is.na(prevent_ascvd_10yr) ~ NA_real_,
+##                         tg_in_goal_band != 1      ~ NA_real_,
+##                         prevent_ascvd_10yr >= cut ~ 70,
+##                         TRUE                      ~ 90)
+##
+## Given triglycerides in band, the row states a goal at EVERY level of risk:
+## 70 above the threshold, 90 below it. Risk selects the VALUE; it never
+## decides whether a goal exists. So for these adults membership is certain --
+## they are assigned -- and it is the threshold, 70 or 90, that cannot be
+## settled without a risk estimate. The first line of that case_when() returns
+## NA when risk is unavailable, which encodes "cannot compute" as "row silent",
+## and that is what produced a membership bound where none exists.
+##
+## Consequently the goal-assigned share over all 9,521 is a POINT ESTIMATE, not
+## a range: every one of the 413 has determinate membership. The uncertainty is
+## real but it lands on goal value, and through it on attainment, so that is
+## what is bounded here instead.
 prevent_missing_bounds <- local({
   elig <- derive_vars(primary_raw) %>%
     filter(
@@ -1640,38 +1828,74 @@ prevent_missing_bounds <- local({
              prevent_scored == 1            ~ "scored",
              goal_without_prevent == 1      ~ "known assigned",
              prevent_row_possible == 0      ~ "known unassigned",
-             TRUE                           ~ "undetermined"),
-           goal_lower = as.integer(coalesce(has_apob_goal == 1, FALSE) |
-                                   (prevent_scored == 0 &
-                                    goal_without_prevent == 1)),
-           goal_upper = as.integer(goal_lower == 1 |
-                                   status == "undetermined"))
+             TRUE                           ~ "assigned, goal value unknown"),
+           ## ROUND 7. Membership is determinate for EVERY eligible adult:
+           ## scored adults carry whatever assign_goals() gave them; the
+           ## unscored are assigned if another row speaks, or if the
+           ## primary-prevention row could speak -- which, given
+           ## triglycerides in band, means it does speak, at 70 or at 90.
+           goal_membership = as.integer(
+             coalesce(has_apob_goal == 1, FALSE) |
+             (prevent_scored == 0 &
+              (goal_without_prevent == 1 | prevent_row_possible == 1))),
+           ## For the value-unknown group, the goal is 70 under the strict
+           ## reading and 90 under the permissive one. Attainment is bounded
+           ## by scoring them both ways; apoB is measured for all of them, so
+           ## this is a real bound and not an assumption.
+           above_if_70 = ifelse(status == "assigned, goal value unknown",
+                                as.integer(LBXAPB >= 70), NA_integer_),
+           above_if_90 = ifelse(status == "assigned, goal value unknown",
+                                as.integer(LBXAPB >= 90), NA_integer_))
 
   des <- svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~wt_pooled,
                    data = elig, nest = TRUE)
-  lo <- svyciprop(~I(goal_lower == 1), des, method = "beta", na.rm = TRUE)
-  hi <- svyciprop(~I(goal_upper == 1), des, method = "beta", na.rm = TRUE)
+  mem <- svyciprop(~I(goal_membership == 1), des, method = "beta",
+                   na.rm = TRUE)
 
   tab <- elig %>% count(status, name = "n_unweighted")
   print(as.data.frame(tab))
 
+  ## The share over all 9,521 is now a single estimate. The guard states the
+  ## reason in the file: if a future change reintroduces an adult whose
+  ## membership genuinely cannot be settled, this stops rather than quietly
+  ## reporting a point estimate that is no longer one.
+  .unsettled <- sum(elig$prevent_scored == 0 &
+                    elig$goal_without_prevent == 0 &
+                    elig$prevent_row_possible == 0 &
+                    is.na(elig$has_apob_goal))
+  stopifnot(.unsettled == 0)
+
+  n_vu <- sum(elig$status == "assigned, goal value unknown")
   out <- tibble(
-    bound        = c("Lower (undetermined treated as NOT assigned)",
-                     "Upper (undetermined treated as assigned)"),
+    quantity     = "Assigned an apoB goal, all eligible adults",
     n_cohort     = nrow(elig),
-    pct_weighted = 100 * c(as.numeric(lo), as.numeric(hi)),
-    ci_low       = 100 * c(attr(lo, "ci")[1], attr(hi, "ci")[1]),
-    ci_high      = 100 * c(attr(lo, "ci")[2], attr(hi, "ci")[2]),
+    n_scored     = sum(elig$prevent_scored),
+    n_value_unknown = n_vu,
+    pct_weighted = 100 * as.numeric(mem),
+    ci_low       = 100 * confint(mem)[1],
+    ci_high      = 100 * confint(mem)[2],
     ci_method    = "korn-graubard")
-  write.csv(out,  "r6_prevent_missing_bounds.csv", row.names = FALSE)
-  write.csv(tab,  "r6_prevent_missing_status.csv", row.names = FALSE)
+
+  ## Value/attainment bound for the adults whose threshold is unsettled.
+  vu <- tibble(
+    n_value_unknown = n_vu,
+    n_above_if_all_70 = sum(elig$above_if_70, na.rm = TRUE),
+    n_above_if_all_90 = sum(elig$above_if_90, na.rm = TRUE))
+
+  write.csv(out, "r6_prevent_missing_membership.csv", row.names = FALSE)
+  write.csv(vu,  "r6_prevent_missing_value_bound.csv", row.names = FALSE)
+  write.csv(tab, "r6_prevent_missing_status.csv", row.names = FALSE)
   message("\nB1 PREVENT missingness, over all ", nrow(elig), " eligible adults:")
-  message("  complete-case estimate (n = ", sum(elig$prevent_scored), "): 33.4%")
-  message("  bounds including the unscored: ",
-          sprintf("%.1f%%", out$pct_weighted[1]), " to ",
-          sprintf("%.1f%%", out$pct_weighted[2]))
+  message("  complete-case estimate (n = ", sum(elig$prevent_scored),
+          "): 33.44%")
+  message("  membership is determinate for all ", nrow(elig),
+          "; share = ", sprintf("%.2f%%", out$pct_weighted),
+          sprintf(" (%.2f-%.2f)", out$ci_low, out$ci_high))
+  message("  goal VALUE unsettled for ", n_vu, " adults; of them, ",
+          vu$n_above_if_all_70, " exceed 70 and ",
+          vu$n_above_if_all_90, " exceed 90 mg/dL")
   for (i in seq_len(nrow(tab)))
-    message("    ", format(tab$status[i], width = 18), tab$n_unweighted[i])
+    message("    ", format(tab$status[i], width = 30), tab$n_unweighted[i])
   out
 })
 
@@ -1733,7 +1957,10 @@ prevent_extended_sensitivity <- tryCatch(local({
       !is.na(LBXAPB), !is.na(ldl_primary), !is.na(LBXTR),
       WTSAF2YR > 0
     ) %>%
-    compute_prevent_risk()
+    ## ROUND 7, efficiency: this is the ONE caller that reads the extended
+    ## columns, so it is the one that asks for them. Every other call to
+    ## compute_prevent_risk() now skips that scoring pass.
+    compute_prevent_risk(extended = TRUE)
 
   if (all(is.na(base$prevent_ascvd_10yr_ext))) {
     message("Extended-model sensitivity SKIPPED: no extended risk was scored.")
@@ -1835,7 +2062,8 @@ prevent_input_ranges <- tryCatch(local({
   ## cannot drift away from the code it documents.
   spec <- tibble::tribble(
     ~variable,                  ~raw,        ~clipped,          ~lo,   ~hi,
-    "Systolic blood pressure",  "avg_sbp",   "prevent_sbp",     90,    180,
+    "Systolic blood pressure",  "avg_sbp",   "prevent_sbp",     90,
+                                                      PREVENT_SBP_CAP,
     "Total cholesterol",        "LBXTC",     "prevent_total_c", 130,   320,
     "HDL cholesterol",          "LBDHDD",    "prevent_hdl_c",   20,    100,
     "eGFR",                     "egfr",      "prevent_egfr",    15,    140,
@@ -1860,50 +2088,112 @@ prevent_input_ranges <- tryCatch(local({
   ranges$pct_clipped <- 100 * (ranges$n_below + ranges$n_above) / nrow(elig)
   write.csv(ranges, "r6_prevent_input_ranges.csv", row.names = FALSE)
 
-  ## ---- what the systolic ceiling can do to the headline -------------------
-  ## DENOMINATOR. The range counts above are over all eligible adults, which is
-  ## the frame the clipping happens in and the one the existing "N of 9,521
-  ## records had >=1 input value clipped" message reports. The BOUND must not
-  ## use that frame: over 9,521 the goal-assigned share is 33.33%, because the
-  ## 413 PREVENT cannot score count as unassigned -- that is the eTable 16
-  ## LOWER bound, not the headline. The headline is the complete-case estimate
-  ## over the 9,108 scored, and a bound on the ceiling is only readable if it
-  ## starts there. Clipping keeps the above-ceiling adults scorable, so none of
-  ## them is lost by restricting to the analytic cohort.
+  ## The "N of 9,521 records had >=1 input clipped" figure quoted in eMethods 2
+  ## was a console message and nothing else, which is how it came to sit at a
+  ## previous run's 1,344 while the code produced 1,298. Recorded here, over
+  ## the same frame the ranges above use, so the number the Supplement quotes
+  ## has a file behind it.
+  .any_clipped <- rowSums(sapply(seq_len(nrow(spec)), function(i) {
+    r <- spec[i, ]
+    v <- elig[[r$raw]]
+    as.integer(!is.na(v) & (v < r$lo | v > r$hi))
+  })) > 0
+  DIAG("prevent_inputs_clipped_n", sum(.any_clipped),
+       "records with at least one PREVENT input clipped, of all eligible")
+  DIAG("prevent_inputs_clipped_pct", 100 * sum(.any_clipped) / nrow(elig),
+       "same, as an unweighted percentage of the eligible frame")
+
+  ## ---- 180 versus 200 mm Hg  (round 7, Dani) ------------------------------
+  ## This block previously bounded the effect of the 180 ceiling on the
+  ## goal-assigned SHARE, counting adults above the ceiling who carried no
+  ## goal as adults who might gain one. Dani objected, and he is right: within
+  ## Figure 1, PREVENT risk selects which apoB goal applies among adults the
+  ## primary-prevention row already covers. It does not decide whether a goal
+  ## exists.
   ##
-  ## The first version of this block used the 9,521 frame and labelled the
-  ## result "as analyzed", which it was not.
-  analytic <- elig %>%
-    filter(!is.na(prevent_ascvd_10yr)) %>%
-    mutate(sbp_above_ceiling = as.integer(coalesce(avg_sbp > 180, FALSE)),
-           ## could only GAIN a goal: above the ceiling and not assigned one
-           could_gain = as.integer(sbp_above_ceiling == 1 &
-                                   coalesce(has_apob_goal, 0L) == 0L),
-           goal_upper_sbp = as.integer(coalesce(has_apob_goal == 1, FALSE) |
-                                       could_gain == 1))
+  ## The row is gated on triglycerides, not on risk:
+  ##   g_pp_apob = case_when(is.na(prevent_ascvd_10yr) ~ NA,
+  ##                         tg_in_goal_band != 1      ~ NA,
+  ##                         prevent_ascvd_10yr >= cut ~ 70,
+  ##                         TRUE                      ~ 90)
+  ## An adult above the ceiling who carries no goal from any row is, by
+  ## construction, an adult whose triglycerides are outside 150-499 -- so the
+  ## primary-prevention row is silent for them at EVERY level of risk, and a
+  ## higher systolic reading cannot confer a goal. The old upper bound counted
+  ## people who could not move.
+  ##
+  ## The ceiling is now 200 mm Hg, the equations' own limit, so this is the
+  ## 180-versus-200 sensitivity Dani asked for in the first place: the primary
+  ## column is 200 and the comparison column is the old 180. What it reports
+  ## is movement in goal VALUE, plus the attainment consequences.
+  analytic <- elig %>% filter(!is.na(prevent_ascvd_10yr))
+
+  ## The counterfactual is exact: assign_goals() reads prevent_ascvd_10yr and
+  ## nothing else, so swapping the 180-scored column into it and re-running
+  ## reproduces the old ceiling without reimplementing any part of the rule.
+  a200 <- analytic
+  a180 <- analytic %>%
+    mutate(prevent_ascvd_10yr = prevent_ascvd_10yr_sbp180) %>%
+    assign_goals()
+
+  stopifnot(nrow(a200) == nrow(a180), identical(a200$SEQN, a180$SEQN))
+
+  n_above_180 <- sum(coalesce(analytic$avg_sbp > 180, FALSE))
+  n_above_cap <- sum(coalesce(analytic$avg_sbp > PREVENT_SBP_CAP, FALSE))
+  mem_change  <- sum(coalesce(a200$has_apob_goal, 0L) !=
+                     coalesce(a180$has_apob_goal, 0L))
+  tighter     <- sum(coalesce(a200$apob_goal < a180$apob_goal, FALSE))
+  looser      <- sum(coalesce(a200$apob_goal > a180$apob_goal, FALSE))
+
+  ## MEMBERSHIP CANNOT MOVE. This is the claim the old block got wrong, so it
+  ## is asserted rather than described: if a future change to Figure 1's
+  ## implementation ever lets risk decide membership, this stops the run and
+  ## the sensitivity is rewritten to say so.
+  if (mem_change != 0)
+    stop("\n\n  Raising the systolic ceiling changed goal MEMBERSHIP for ",
+         mem_change, " adults.\n",
+         "  Under the current implementation the primary-prevention row is\n",
+         "  gated on triglycerides and risk selects only the goal VALUE, so\n",
+         "  this should be impossible. Do not report the table until the\n",
+         "  reason is understood.\n", call. = FALSE)
 
   des <- svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~wt_pooled,
-                   data = analytic, nest = TRUE)
-  lo <- svyciprop(~I(has_apob_goal == 1),  des, method = "beta", na.rm = TRUE)
-  hi <- svyciprop(~I(goal_upper_sbp == 1), des, method = "beta", na.rm = TRUE)
-
-  ## The lower row must reproduce the headline exactly; if it ever stops doing
-  ## so the denominator has drifted again and the table is not comparable.
-  stopifnot(abs(100 * as.numeric(lo) - 33.4436949661563) < 0.01)
+                   data = a200, nest = TRUE)
+  des180 <- svydesign(ids = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~wt_pooled,
+                      data = a180, nest = TRUE)
+  pull <- function(d, f) {
+    ci <- svyciprop(f, d, method = "beta", na.rm = TRUE)
+    c(100 * as.numeric(ci), 100 * confint(ci)[1], 100 * confint(ci)[2])
+  }
+  g200 <- pull(des,    ~I(has_apob_goal == 1))
+  g180 <- pull(des180, ~I(has_apob_goal == 1))
+  a200_above <- pull(subset(des,    has_apob_goal == 1), ~I(above_apob_goal == 1))
+  a180_above <- pull(subset(des180, has_apob_goal == 1), ~I(above_apob_goal == 1))
+  d200 <- pull(subset(des,    has_apob_goal == 1), ~I(discordant == 1))
+  d180 <- pull(subset(des180, has_apob_goal == 1), ~I(discordant == 1))
 
   bounds <- tibble(
-    bound = c("As analyzed (systolic pressure clipped to 180 mm Hg)",
-              "Upper: every adult above the ceiling gains a goal"),
+    quantity = rep(c("Assigned an apoB goal",
+                     "Above apoB goal among assigned",
+                     "Discordant among assigned"), each = 2),
+    ceiling  = rep(c(PREVENT_SBP_CAP, 180), times = 3),
+    pct_weighted = c(g200[1], g180[1], a200_above[1], a180_above[1],
+                     d200[1], d180[1]),
+    ci_low       = c(g200[2], g180[2], a200_above[2], a180_above[2],
+                     d200[2], d180[2]),
+    ci_high      = c(g200[3], g180[3], a200_above[3], a180_above[3],
+                     d200[3], d180[3]),
     n_cohort            = nrow(analytic),
     n_eligible          = nrow(elig),
-    n_above_ceiling     = sum(analytic$sbp_above_ceiling),
-    n_could_gain        = sum(analytic$could_gain),
-    pct_weighted        = 100 * c(as.numeric(lo), as.numeric(hi)),
-    ci_low              = 100 * c(attr(lo, "ci")[1], attr(hi, "ci")[1]),
-    ci_high             = 100 * c(attr(lo, "ci")[2], attr(hi, "ci")[2]),
-    preventr_version    = as.character(utils::packageVersion("preventr")),
-    ci_method           = "korn-graubard")
-  write.csv(bounds, "r6_sbp_clip_bounds.csv", row.names = FALSE)
+    n_above_180         = n_above_180,
+    n_above_cap         = n_above_cap,
+    n_goal_value_changed = tighter + looser,
+    n_goal_tightened     = tighter,
+    n_goal_loosened      = looser,
+    n_membership_changed = mem_change,
+    preventr_version     = as.character(utils::packageVersion("preventr")),
+    ci_method            = "korn-graubard")
+  write.csv(bounds, "r7_sbp_180_vs_200.csv", row.names = FALSE)
 
   message("\nB3 PREVENT input ranges, over ", nrow(elig), " eligible adults:")
   for (i in seq_len(nrow(ranges)))
@@ -1911,20 +2201,30 @@ prevent_input_ranges <- tryCatch(local({
             "below ", format(ranges$n_below[i], width = 5),
             "above ", format(ranges$n_above[i], width = 5),
             sprintf("(%.1f%% clipped)", ranges$pct_clipped[i]))
-  message("  above the systolic ceiling (analytic cohort, n = ",
-          nrow(analytic), "): ", sum(analytic$sbp_above_ceiling),
-          "; of those, unassigned and so able to change: ",
-          sum(analytic$could_gain))
-  message("  goal-assigned share: ", sprintf("%.2f%%", bounds$pct_weighted[1]),
-          " as analyzed, at most ", sprintf("%.2f%%", bounds$pct_weighted[2]),
-          " if every one of them gained a goal")
+  message("  systolic 180 vs ", PREVENT_SBP_CAP, " (analytic cohort, n = ",
+          nrow(analytic), "):")
+  message("    above 180: ", n_above_180, "   above ", PREVENT_SBP_CAP,
+          " and still clipped: ", n_above_cap)
+  message("    goal VALUE changed: ", tighter + looser,
+          " (", tighter, " tightened, ", looser, " loosened)")
+  message("    goal MEMBERSHIP changed: ", mem_change, " (must be 0)")
+  message(sprintf("    assigned: %.2f%% at %d vs %.2f%% at 180",
+                  g200[1], PREVENT_SBP_CAP, g180[1]))
+  message(sprintf("    above goal: %.2f%% vs %.2f%%; discordant: %.2f%% vs %.2f%%",
+                  a200_above[1], a180_above[1], d200[1], d180[1]))
   message("  preventr version: ", bounds$preventr_version[1])
   list(ranges = ranges, bounds = bounds)
 }), error = function(e) {
+  ## The tryCatch exists so a DIAGNOSTIC cannot kill an hour-long run. The
+  ## membership assertion is not a diagnostic: if raising the systolic ceiling
+  ## moves goal membership, the implementation is not what the paper says it
+  ## is, and everything downstream is in question. Re-raise that one.
+  if (grepl("changed goal MEMBERSHIP", conditionMessage(e), fixed = TRUE))
+    stop(e)
   message("*** B3 PREVENT input-range diagnostic FAILED: ",
           conditionMessage(e),
           "\n    The run continues; r6_prevent_input_ranges.csv and ",
-          "r6_sbp_clip_bounds.csv were not written.")
+          "r7_sbp_180_vs_200.csv were not written.")
   NULL
 })
 
@@ -2660,6 +2960,8 @@ trigger_df <- primary_df %>%
 untested_df <- trigger_df %>%
   filter(statin_eligible_2026 == 0, on_statin == 0)
 
+DIAG("rq9_untested_denominator_n", nrow(untested_df),
+     "neither statin-eligible under the guideline nor taking a statin")
 message("RQ9 denominator: ", nrow(untested_df), " of ", nrow(trigger_df),
         " primary-prevention adults are neither statin-eligible under the 2026 ",
         "guideline nor currently taking a statin (",
@@ -3350,6 +3652,8 @@ print(sens_status_change_by_statin)
 # still the full-cohort one.
 sens_alt_design <- subset(apob_design, !is.na(ldl_alt))
 sens_alt_n <- sum(!is.na(apob_design$variables$ldl_alt))
+DIAG("friedewald_comparison_arm_n", sens_alt_n,
+     "goal-assigned records where the alternative LDL-C equation is computable")
 message("Section 11b comparison arm restricted to ", sens_alt_n, " of ",
         nrow(apob_design$variables), " goal-assigned records where ",
         ALT_EQ_LABEL, " is computable.")
@@ -3601,6 +3905,8 @@ secondary_design <- svydesign(
     message("  Carried into very-high-risk status by CKD alone, i.e. not ",
             "qualifying by the Figure 10 events-and-conditions criteria: ",
             n_via_ckd, ".")
+    DIAG("ckd_route_gained_goal_n", n_gained,
+         "ASCVD+CKD route: gained a goal they would not otherwise hold")
     message("  Of those, GAINED an apolipoprotein B goal they would not ",
             "otherwise hold: ", n_gained,
             "  <-- this is the number quoted in the manuscript Methods.")
@@ -4213,6 +4519,11 @@ surv_df <- trend_df %>%
   ) %>%
   filter(!is.na(mort_group), time_yrs > 0, age_exit > age_entry)
 
+DIAG("mortality_allcause_deaths", sum(surv_df$death_allcause),
+     "all-cause deaths in the mortality-linked analytic sample")
+DIAG("mortality_cvd_deaths", sum(surv_df$death_cvd),
+     "cardiovascular deaths in the mortality-linked analytic sample")
+DIAG("mortality_person_records", nrow(surv_df), "mortality-linked person-records")
 message("Mortality-linked analytic sample: ", nrow(surv_df), " person-records, ",
         sum(surv_df$death_allcause), " all-cause deaths, ",
         sum(surv_df$death_cvd), " CVD deaths, follow-up through Dec 31, 2019.")

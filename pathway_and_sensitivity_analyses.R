@@ -642,3 +642,18 @@ local({
     message("  ", format(out$quantity[i], width = 40),
             sprintf("%6.2f%% -> %6.2f%%", out$all_pct[i], out$excl_pct[i]))
 })
+
+
+## =============================================================================
+## RUN DIAGNOSTICS -- written last, after every script that records one
+## =============================================================================
+## DIAG() is defined in nhanes_apob_analysis.R and collects the counts that
+## used to exist only in the console log. This is the last article-producing
+## script in run_all.R's order, so everything recorded is in hand by now.
+## Guarded on existence so this file still runs standalone.
+if (exists("write_run_diagnostics")) {
+  write_run_diagnostics()
+} else {
+  message("write_run_diagnostics() not found -- run_diagnostics.csv not written. ",
+          "Run this through run_all.R, or source nhanes_apob_analysis.R first.")
+}

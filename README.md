@@ -139,12 +139,14 @@ build; the error message gives the full command.
 | Script | Lines | Purpose |
 |---|---|---|
 | `run_all.R` | 180 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
-| `nhanes_apob_analysis.R` | 4371 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~47 CSVs (including the goal-assignment bounds for adults PREVENT cannot score, the PREVENT input-range diagnostic, and the base-versus-extended PREVENT model comparison) |
-| `precedence_and_model_analyses.R` | 712 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
-| `precedence_diagnostics.R` | 142 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
+| `nhanes_apob_analysis.R` | 4682 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~50 CSVs (including goal assignment over all eligible adults for those PREVENT cannot score, the PREVENT input-range diagnostic, the 180-versus-200 systolic comparison, and the base-versus-extended PREVENT model comparison) |
+| `precedence_and_model_analyses.R` | 810 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
+| `precedence_diagnostics.R` | 157 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
 | `verify_run.R` | 429 | 29 independent checks: convergence, separation, goal-cell consistency, survey design sanity, NCHS presentation standards, cycle influence, mortality event counts, config provenance |
 | `table1_and_figures.R` | 416 | Baseline characteristics table, the figures, and the per-cycle apoB means behind the calibration figure |
-| `pathway_and_sensitivity_analyses.R` | 644 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
+| `pathway_and_sensitivity_analyses.R` | 659 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
+
+Every script also records the counts it prints to the console into `run_diagnostics.csv`, written at the end of the run. Those counts (the PREVENT clipping total, the Friedewald comparison arm, the mortality-linked deaths, the first-match absorption breakdown and others) are quoted in the manuscript and Supplement, and until round 7 they existed only in the run log, where no check could see them.
 | `compare_blind_coding.R` | 224 | Agreement, Cohen's kappa, weighted kappa, and the effect of coding differences on the headline estimates |
 | `export_blind_dataset.R` | 115 | Builds the de-identified dataset released to the independent coder, guarding against 24 forbidden column patterns |
 | `cohort_definition_diagnostics.R` | 185 | What the LDL-C eligibility filter excludes, and the hypertension definition under first-reading versus averaged blood pressure |

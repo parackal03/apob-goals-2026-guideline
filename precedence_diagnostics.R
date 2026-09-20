@@ -60,6 +60,19 @@ sil <- absorbed %>% filter(absorbed_by_silent_row) %>%
             by_hypertrig = sum(in_hypertrig & !in_diabetes & !in_severe_hc),
             both         = sum(in_severe_hc & in_hypertrig))
 print(as.data.frame(sil))
+## Quoted in eMethods 1 as "836 ... 608 absorbed by the hypertriglyceridemia
+## row and 228 by severe hypercholesterolemia". by_severe_hc and by_hypertrig
+## are mutually exclusive by construction, so they sum to the 836; `both` is an
+## overlap diagnostic and is NOT part of that sum. Recorded so the Supplement's
+## arithmetic can be checked against a file rather than against the console.
+if (exists("DIAG")) {
+  DIAG("absorbed_by_silent_row_n", sum(absorbed$absorbed_by_silent_row),
+       "denied a goal under first-match because a silent row was reached first")
+  DIAG("absorbed_by_severe_hc_n", sil$by_severe_hc,
+       "of those, absorbed by the severe-hypercholesterolaemia row")
+  DIAG("absorbed_by_hypertrig_n", sil$by_hypertrig,
+       "of those, absorbed by the hypertriglyceridaemia row")
+}
 
 ## Is clinical_ascvd inert here? (primary_df excludes ASCVD by construction)
 message("  Records in the clinical_ascvd row within primary prevention: ",
@@ -133,6 +146,8 @@ write.csv(strin, "rev5_stringency_sensitivity.csv", row.names = FALSE)
 print(as.data.frame(strin))
 
 n_diff <- sum(primary_df$apob_goal != primary_df$apob_goal_lenient, na.rm = TRUE)
+if (exists("DIAG")) DIAG("stringency_goal_value_differs_n", n_diff,
+    "adults with a goal whose goal VALUE differs between the two stringency rules")
 message("  Participants whose goal VALUE differs between the two rules: ",
         n_diff, " of ", sum(primary_df$has_apob_goal == 1),
         " with a goal (", round(100 * n_diff / sum(primary_df$has_apob_goal == 1), 1), "%).")
