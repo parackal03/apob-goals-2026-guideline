@@ -1,3 +1,6 @@
+## OCTOBER 2026: every svyciprop() in this script now uses method = "beta"
+## (Korn-Graubard), as the Methods state. The remaining logit intervals were
+## switched in one pass so a single run makes the paper consistent.
 ## =============================================================================
 ## NHANES Apolipoprotein B (ApoB) Discordance & Reclassification Analysis
 ## Companion script to: NHANES_ApoB_Study_Protocol.docx
@@ -150,7 +153,7 @@ CONFIG <- list(
   ## unchanged by this switch; goal-attainment estimates are not.
   htn_counts_treatment = TRUE,
 
-  ## CLINICAL ASCVD WITH CKD -- added 2026-09-02 (reviewer comment, Dani r2).
+  ## CLINICAL ASCVD WITH CKD -- added 2026-09-02 (reviewer comment, round 2).
   ##
   ## Figure 1 names chronic kidney disease exactly once. It is NOT a patient-
   ## population row. It appears as a bullet in the Clinical ASCVD row, in the
@@ -508,7 +511,7 @@ if (!requireNamespace("preventr", quietly = TRUE)) {
 library(preventr)
 
 ## =============================================================================
-## PREVENT SYSTOLIC INPUT CEILING  (round 7, Dani)
+## PREVENT SYSTOLIC INPUT CEILING  (round 7, reviewer)
 ## =============================================================================
 ## preventr refuses a systolic pressure above 180 mm Hg. That is NOT the limit
 ## of the equations. The package's own documentation for estimate_risk() says
@@ -1121,7 +1124,7 @@ compute_prevent_risk <- function(df, extended = FALSE) {
       prevent_egfr    = clip(egfr,    15, 140),
       prevent_bmi     = clip(BMXBMI,  18.5, 39.9),
       prevent_sex     = ifelse(RIAGENDR == 2, "female", "male"),
-      ## Round-6 (Dani): the two optional PREVENT predictors NHANES can
+      ## Round-6 (reviewer): the two optional PREVENT predictors NHANES can
       ## support. Clipped to preventr's documented ranges the same way as
       ## the required inputs. The third optional predictor, the social
       ## deprivation index, needs a ZIP code that the public-use files do
@@ -1177,8 +1180,8 @@ compute_prevent_risk <- function(df, extended = FALSE) {
   out <- df %>%
     left_join(scored %>% select(SEQN, cycle, prevent_ascvd_10yr = ascvd), by = c("SEQN", "cycle"))
 
-  ## ---- 180-mm-Hg COMPARISON SCORE  (round 7, Dani) --------------------
-  ## Dani asked for an 180-versus-200 sensitivity. The primary score above
+  ## ---- 180-mm-Hg COMPARISON SCORE  (round 7, reviewer) ----------------
+  ## The reviewer asked for an 180-versus-200 sensitivity. The primary score above
   ## now uses 200, so the comparison arm is the old 180 ceiling. Only the
   ## records that actually exceed 180 can differ: below that the clipped
   ## input is byte-identical, so rescoring them would burn minutes to
@@ -1212,8 +1215,8 @@ compute_prevent_risk <- function(df, extended = FALSE) {
             "rescored at 180 for the comparison arm.")
   }
 
-  ## ---- EXTENDED-MODEL 10-YEAR RISK (round 6, Dani) --------------------
-  ## Dani asked us to assess incorporating HbA1c and UACR. They are not a
+  ## ---- EXTENDED-MODEL 10-YEAR RISK (round 6, reviewer) ----------------
+  ## The reviewer asked us to assess incorporating HbA1c and UACR. They are not a
   ## correction to the base score, they are a different score: PREVENT's
   ## extended equations give a different 10-year risk, and Figure 1's
   ## primary-prevention row turns on whether that risk crosses 10%. So a
@@ -1702,6 +1705,53 @@ assign_goals <- function(df) {
       # PRIMARY OUTCOME: discordance = at LDL-C goal but above ApoB goal
       discordant = as.integer(at_ldl_goal == 1 & above_apob_goal == 1),
 
+      ## --- NON-HDL-C GOAL, AND THE FOUR-STATE GOAL PARTITION ---------------
+      ## ADDED 24 September 2026, for the apoB MEASUREMENT recommendation
+      ## ("...once LDL-C and/or non-HDL-C goals are achieved"). Consumed by
+      ## RQ11; nothing above this line reads any of it, so every pre-existing
+      ## estimate in this script is unchanged by its presence.
+      ##
+      ## Figure 1 pairs a non-HDL-C goal with each LDL-C goal, column by
+      ## column: <100/<130, <70/<100, <55/<85. So nonhdl_goal is a LOOKUP on
+      ## the LDL-C goal assigned above -- not a new derivation, not an
+      ## imputation, and emphatically not a second pass through the
+      ## precedence-free pmin() logic, which would be a different rule applied
+      ## to a different set of thresholds. Every participant with an LDL-C goal
+      ## gets a non-HDL-C goal and no one else does; RQ11 stops the run if that
+      ## ever stops being true.
+      ##
+      ## at_goal() as everywhere else, never a bare comparison. The guard in
+      ## Section 8 now scans for nonhdl too, so a bare one cannot creep back.
+      nonhdl_goal = case_when(
+        ldl_goal == 100 ~ 130,
+        ldl_goal ==  70 ~ 100,
+        ldl_goal ==  55 ~  85,
+        TRUE            ~ NA_real_
+      ),
+      at_nonhdl_goal = as.integer(at_goal(nonhdl, nonhdl_goal)),
+      at_either_goal = as.integer(at_ldl_goal == 1 | at_nonhdl_goal == 1),
+
+      ## Four mutually exclusive, exhaustive states for anyone with a goal.
+      ## "At LDL-C goal" -- the population RQ1c and every downstream estimate
+      ## is built on -- is exactly both + ldl_only. That identity is what makes
+      ## RQ11 a finer cut of the published denominator rather than a new and
+      ## separately arguable one, and RQ11 asserts it rather than assuming it.
+      goal_pair_cell = case_when(
+        at_ldl_goal == 1 & at_nonhdl_goal == 1 ~ "both",
+        at_ldl_goal == 1 & at_nonhdl_goal == 0 ~ "ldl_only",
+        at_ldl_goal == 0 & at_nonhdl_goal == 1 ~ "nonhdl_only",
+        at_ldl_goal == 0 & at_nonhdl_goal == 0 ~ "neither",
+        TRUE                                   ~ NA_character_
+      ),
+
+      ## Lipid-lowering therapy. Section 15d (RQ6d) built its own copy of this
+      ## on secondary_df with an identical definition; defining it here means
+      ## RQ11 and RQ6d cannot drift apart. on_statin and on_nonstatin_lipid_tx
+      ## are already coalesced to 0L in load_cycle(), so there are no NAs to
+      ## swallow -- the coalesce() is belt and braces.
+      on_any_lipid_tx = as.integer(coalesce(on_statin, 0L) == 1 |
+                                   coalesce(on_nonstatin_lipid_tx, 0L) == 1),
+
       # SENSITIVITY PARALLEL: the same two quantities computed from whichever
       # equation is NOT primary, carried alongside so Section 11b can quantify
       # how much of the discordance signal is equation-driven. Not used
@@ -1780,7 +1830,7 @@ primary_df <- derive_vars(primary_raw) %>%
 ##                    only the PREVENT row could have assigned them -- and it
 ##                    DOES assign them. See below.
 ##
-## ROUND 7 CORRECTION (Dani). The third group was previously called
+## ROUND 7 CORRECTION (reviewer). The third group was previously called
 ## UNDETERMINED and treated as a membership question, with the share over 9,521
 ## reported as a bound. That was wrong, and the error is visible in this
 ## script's own definition of the row:
@@ -1902,7 +1952,7 @@ prevent_missing_bounds <- local({
 ## ---------------------------------------------------------------------------
 ## B3 (round 6). PREVENT input ranges, and what the systolic clip can do.
 ##
-## Dani asked for a rerun at an SBP ceiling of 200, or an 180-vs-200
+## The reviewer asked for a rerun at an SBP ceiling of 200, or an 180-vs-200
 ## sensitivity. Neither is available: 90-180 is preventr's own validated range,
 ## not a setting of ours, and outside it estimate_risk() returns NA with
 ## input_problems set rather than a risk estimate. Raising the ceiling would
@@ -1930,7 +1980,7 @@ prevent_missing_bounds <- local({
 ## silently omitting eTable 18.
 
 ## ---------------------------------------------------------------------------
-## Round 6 (Dani): PREVENT base model vs base + HbA1c + UACR.
+## Round 6 (reviewer): PREVENT base model vs base + HbA1c + UACR.
 ##
 ## The ask was to "assess incorporation of HbA1c and UACR where available".
 ## They are available: in this cohort HbA1c is present for ~99.8% and UACR is
@@ -2103,10 +2153,10 @@ prevent_input_ranges <- tryCatch(local({
   DIAG("prevent_inputs_clipped_pct", 100 * sum(.any_clipped) / nrow(elig),
        "same, as an unweighted percentage of the eligible frame")
 
-  ## ---- 180 versus 200 mm Hg  (round 7, Dani) ------------------------------
+  ## ---- 180 versus 200 mm Hg  (round 7, reviewer) --------------------------
   ## This block previously bounded the effect of the 180 ceiling on the
   ## goal-assigned SHARE, counting adults above the ceiling who carried no
-  ## goal as adults who might gain one. Dani objected, and he is right: within
+  ## goal as adults who might gain one. The reviewer objected, correctly: within
   ## Figure 1, PREVENT risk selects which apoB goal applies among adults the
   ## primary-prevention row already covers. It does not decide whether a goal
   ## exists.
@@ -2123,7 +2173,7 @@ prevent_input_ranges <- tryCatch(local({
   ## people who could not move.
   ##
   ## The ceiling is now 200 mm Hg, the equations' own limit, so this is the
-  ## 180-versus-200 sensitivity Dani asked for in the first place: the primary
+  ## 180-versus-200 sensitivity the reviewer asked for in the first place: the primary
   ## column is 200 and the comparison column is the old 180. What it reports
   ## is movement in goal VALUE, plus the attainment consequences.
   analytic <- elig %>% filter(!is.na(prevent_ascvd_10yr))
@@ -2287,8 +2337,11 @@ local({
              "pathway_and_sensitivity_analyses.R", "compare_blind_coding.R",
              "verify_run.R")
   files <- files[file.exists(files)]
-  pat <- paste0("(LBXAPB|ldl_primary|ldl_alt)\\s*(<=|>=|<|>)\\s*",
-                "[A-Za-z0-9_$]*(apob_goal|ldl_goal)")
+  ## nonhdl / nonhdl_goal added to the scan 24 September 2026, at the same
+  ## time as the variables themselves -- the guard was extended in the same
+  ## commit that created the thing it guards, rather than afterwards.
+  pat <- paste0("(LBXAPB|ldl_primary|ldl_alt|nonhdl)\\s*(<=|>=|<|>)\\s*",
+                "[A-Za-z0-9_$]*(apob_goal|ldl_goal|nonhdl_goal)")
   hits <- unlist(lapply(files, function(f) {
     ln <- readLines(f, warn = FALSE)
     ln <- ln[!grepl("^\\s*#", ln)]          # comments are allowed to show the pattern
@@ -2341,7 +2394,7 @@ if (.n_dom != nrow(primary_df))
        "before reading anything below.", call. = FALSE)
 
 ## Headline estimates, both ways. Point estimates should be identical; the
-## question Dani raises is whether the standard errors are.
+## question the reviewer raises is whether the standard errors are.
 .cmp <- function(lbl, form, d1, d2) {
   e1 <- svyciprop(form, d1, method = "beta", na.rm = TRUE)
   e2 <- svyciprop(form, d2, method = "beta", na.rm = TRUE)
@@ -2450,8 +2503,8 @@ message("  --> This is a reportable finding in its own right: the guideline ",
 ## could score), so any difference reflects the tiering method itself, not
 ## sample composition.
 
-rq0_proxy_prevalence   <- svyciprop(~I(discordant_proxy == 1), apob_design, method = "logit")
-rq0_prevent_prevalence <- svyciprop(~I(discordant == 1),       apob_design, method = "logit")
+rq0_proxy_prevalence   <- svyciprop(~I(discordant_proxy == 1), apob_design, method = "beta")
+rq0_prevent_prevalence <- svyciprop(~I(discordant == 1),       apob_design, method = "beta")
 rq0_comparison <- tibble(
   method   = c("diabetes/CKD proxy (original)", "PREVENT-ASCVD-based (this run)"),
   estimate = c(as.numeric(rq0_proxy_prevalence), as.numeric(rq0_prevent_prevalence)),
@@ -2646,16 +2699,16 @@ message("RQ1b: ", scales::percent(rq1b_summary$estimate, accuracy = 0.01),
 ## ---- 8. RQ2 -- discordance among guideline-flagged subgroups ------------------
 
 rq2_by_flagged <- svyby(~I(discordant == 1), ~apob_flagged_group, apob_design,
-                         svyciprop, vartype = "ci", method = "logit")
+                         svyciprop, vartype = "ci", method = "beta")
 
 rq2_by_condition <- bind_rows(
-  svyby(~I(discordant == 1), ~diabetes,  apob_design, svyciprop, vartype = "ci", method = "logit") %>%
+  svyby(~I(discordant == 1), ~diabetes,  apob_design, svyciprop, vartype = "ci", method = "beta") %>%
     as_tibble() %>% mutate(condition = "diabetes") %>% rename(level = diabetes),
-  svyby(~I(discordant == 1), ~ckd,       apob_design, svyciprop, vartype = "ci", method = "logit") %>%
+  svyby(~I(discordant == 1), ~ckd,       apob_design, svyciprop, vartype = "ci", method = "beta") %>%
     as_tibble() %>% mutate(condition = "ckd") %>% rename(level = ckd),
-  svyby(~I(discordant == 1), ~obesity,   apob_design, svyciprop, vartype = "ci", method = "logit") %>%
+  svyby(~I(discordant == 1), ~obesity,   apob_design, svyciprop, vartype = "ci", method = "beta") %>%
     as_tibble() %>% mutate(condition = "obesity") %>% rename(level = obesity),
-  svyby(~I(discordant == 1), ~hypertrig, apob_design, svyciprop, vartype = "ci", method = "logit") %>%
+  svyby(~I(discordant == 1), ~hypertrig, apob_design, svyciprop, vartype = "ci", method = "beta") %>%
     as_tibble() %>% mutate(condition = "hypertriglyceridemia") %>% rename(level = hypertrig)
 )
 print(rq2_by_condition)
@@ -2688,7 +2741,7 @@ apob_design <- subset(primary_design, has_apob_goal == 1)
 
 rq7_income_design <- subset(apob_design, !is.na(income_tier))
 rq7_by_income <- svyby(~I(discordant == 1), ~income_tier, rq7_income_design,
-                        svyciprop, vartype = "ci", method = "logit")
+                        svyciprop, vartype = "ci", method = "beta")
 rq7_by_income_df <- as_tibble(rq7_by_income)
 names(rq7_by_income_df)[2] <- "prevalence"
 print(rq7_by_income_df)
@@ -2698,7 +2751,7 @@ print(rq7_by_income_df)
 ## denominators and were not comparable to each other.
 rq7_insurance_design <- subset(apob_design, !is.na(insured))
 rq7_by_insurance <- svyby(~I(discordant == 1), ~insured, rq7_insurance_design,
-                           svyciprop, vartype = "ci", method = "logit")
+                           svyciprop, vartype = "ci", method = "beta")
 rq7_by_insurance_df <- as_tibble(rq7_by_insurance)
 names(rq7_by_insurance_df)[2] <- "prevalence"
 print(rq7_by_insurance_df)
@@ -2743,7 +2796,7 @@ message("RQ7: discordance prevalence by income tier and insurance status written
 ## between treatment status and discordance, not a before/after causal test.
 
 rq8_by_statin <- svyby(~I(discordant == 1), ~on_statin, apob_design,
-                        svyciprop, vartype = "ci", method = "logit")
+                        svyciprop, vartype = "ci", method = "beta")
 rq8_by_statin_df <- as_tibble(rq8_by_statin)
 names(rq8_by_statin_df)[2] <- "prevalence"
 print(rq8_by_statin_df)
@@ -2825,7 +2878,7 @@ rq8b_at_ldl_goal_design <- subset(apob_design, at_ldl_goal == 1)
 
 rq8b_by_statin <- tryCatch(
   svyby(~I(discordant == 1), ~on_statin, rq8b_at_ldl_goal_design,
-        svyciprop, vartype = "ci", method = "logit"),
+        svyciprop, vartype = "ci", method = "beta"),
   error = function(e) {
     message("Could not compute discordance by statin status within the at-LDL-goal ",
             "subgroup (likely a cell too small): ", conditionMessage(e))
@@ -2986,10 +3039,10 @@ evaluate_trigger <- function(trig_name, label, design, df) {
   d <- update(design, .trig = df[[trig_name]])
 
   yield_pos <- tryCatch(
-    svyciprop(~I(apob_markedly_high == 1), subset(d, .trig == 1), method = "logit"),
+    svyciprop(~I(apob_markedly_high == 1), subset(d, .trig == 1), method = "beta"),
     error = function(e) NULL)
   yield_neg <- tryCatch(
-    svyciprop(~I(apob_markedly_high == 1), subset(d, .trig == 0), method = "logit"),
+    svyciprop(~I(apob_markedly_high == 1), subset(d, .trig == 0), method = "beta"),
     error = function(e) NULL)
 
   # Weighted national count missed = trigger-negative AND markedly high ApoB
@@ -3385,7 +3438,7 @@ message("RQ10 complete. Compare the printed cohort counts and yields against the
 
 ## ---- 9. RQ3 -- secular trend, 2005-2016 (6 cycles) -----------------------------
 
-rq3_trend <- svyby(~I(discordant == 1), ~cycle, trend_design, svyciprop, vartype = "ci", method = "logit")
+rq3_trend <- svyby(~I(discordant == 1), ~cycle, trend_design, svyciprop, vartype = "ci", method = "beta")
 rq3_trend_df <- as_tibble(rq3_trend)
 # Positional rename: svyby names the 2nd column after the formula (e.g.
 # "I(discordant == 1)"), which is awkward to reference -- rename by position
@@ -3531,6 +3584,465 @@ print(as.data.frame(rq1c_reclassification))
 message("RQ1c: reclassification among adults at LDL-C goal written to ",
         "rq1c_reclassification_at_ldl_goal.csv. This is the primary source ",
         "for that estimate -- do not cite it from the sens_* or rev* files.")
+
+## =============================================================================
+## RQ11 -- WHERE THE DISCORDANCE IS: THE LDL-C / NON-HDL-C GOAL PARTITION
+## =============================================================================
+## ADDED 24 September 2026, in response to the lipid consultant's review of the
+## guideline's apoB MEASUREMENT recommendation:
+##
+##   "In adults on LLT, particularly those with ASCVD, CKM syndrome, type 2
+##    diabetes, and/or elevated TG, measurement of apoB is reasonable to guide
+##    decisions regarding further therapeutic intensification once LDL-C
+##    and/or non-HDL-C goals are achieved."
+##
+## RQ1c above answers a related question with a single number: among adults at
+## their LDL-C goal, what share exceed their apoB goal. This section splits that
+## same population by whether the person is ALSO at their non-HDL-C goal -- the
+## distinction the recommendation's "and/or" turns on, and one nothing in this
+## script previously used, despite nonhdl having been computed since Section 5.
+##
+## WHY IT IS WORTH A SECTION. The feasibility counts that motivated this
+## (feasibility_q2.R / _q2b.R / _q2c.R, 24 September) found the single number
+## conceals roughly a tenfold range: about 6.6% among adults at goal on both
+## measures against about 64.6% among those at goal on LDL-C but above
+## non-HDL-C. Those scripts are scratch work and are NOT the source of any
+## published value. This section is.
+##
+## WHAT IS NEW AND WHAT IS NOT.
+##   at LDL-C goal   unchanged. It is exactly goal_pair_cell in
+##                   {both, ldl_only}, and the validation block below stops the
+##                   run if this section's cells fail to re-sum to RQ1c's own
+##                   n and numerator. No threshold anywhere in this script
+##                   moves, and no existing estimate is recomputed.
+##   the partition   new, but derived by lookup from goals already assigned.
+##   on therapy      reported as a SUBGROUP, never as a restriction. The
+##                   feasibility run found the gradient materially the same in
+##                   treated and untreated adults, so restricting the analysis
+##                   to the recommendation's literal population would halve
+##                   every denominator and buy no finding. The untreated arm is
+##                   carried so that claim is visible rather than asserted.
+##
+## SUBSETTING IS BY SEQN, deliberately. Each cell's design is built from the
+## SEQNs of the very mask that produced its unweighted n, so the n reported and
+## the people estimated from are provably the same set. Subsetting the design
+## on an expression and counting the frame separately is how those two quietly
+## diverge.
+##
+## REPORTING. nchs_present() gates every cell, as everywhere else in this
+## script. One cell is expected to fail it narrowly -- Korn-Graubard width
+## about 0.3013 against a 0.30 suppression threshold, on n = 90 with 59 events.
+## That is RECORDED here as a flag and acted on nowhere: whether it is
+## suppressed or carried with an explicit unreliability marker is an authorial
+## decision, it belongs in the document build, and changing it must never
+## require rerunning this pipeline.
+## =============================================================================
+
+stopifnot(all(is.na(primary_df$nonhdl_goal) == is.na(primary_df$ldl_goal)))
+
+.rq11_G <- coalesce(primary_df$has_apob_goal   == 1, FALSE)
+.rq11_A <- coalesce(primary_df$above_apob_goal == 1, FALSE)
+
+## --- VALIDATION -------------------------------------------------------------
+## both + ldl_only IS "at LDL-C goal". If those two cells do not reproduce
+## RQ1c's n and numerator then the non-HDL-C lookup in assign_goals() is wrong,
+## or goal_pair_cell has drifted out of step with at_ldl_goal, and everything
+## below is wrong with it. Tied to RQ1c's COMPUTED values rather than to a
+## remembered constant, so it keeps working when the cohort changes.
+local({
+  at_ldl <- .rq11_G & primary_df$goal_pair_cell %in% c("both", "ldl_only")
+  n_chk  <- sum(at_ldl)
+  e_chk  <- sum(at_ldl & .rq11_A)
+  if (n_chk != reclass_summary$n ||
+      e_chk != reclass_summary$reclassified_by_apob)
+    stop("\n\nRQ11 partition does not re-sum to RQ1c.\n",
+         "  partition both + ldl_only:  n = ", n_chk,
+         ", above apoB goal = ", e_chk, "\n",
+         "  RQ1c at LDL-C goal:         n = ", reclass_summary$n,
+         ", reclassified = ", reclass_summary$reclassified_by_apob, "\n",
+         "  The non-HDL-C goal lookup in assign_goals() is wrong, or ",
+         "goal_pair_cell\n  has drifted from at_ldl_goal. Run stopped.\n",
+         call. = FALSE)
+  message("RQ11 validation: the partition re-sums to RQ1c exactly (n = ",
+          n_chk, ", above apoB goal = ", e_chk, ").")
+  DIAG("rq11_validation_at_ldl_goal_n", n_chk,
+       "both + ldl_only; must equal RQ1c n")
+  DIAG("rq11_validation_at_ldl_goal_above_apob", e_chk,
+       "both + ldl_only; must equal RQ1c numerator")
+})
+
+## --- the four cells in three populations -------------------------------------
+.rq11_pop_masks <- list(
+  all             = .rq11_G,
+  on_lipid_tx     = .rq11_G & coalesce(primary_df$on_any_lipid_tx == 1, FALSE),
+  not_on_lipid_tx = .rq11_G & coalesce(primary_df$on_any_lipid_tx == 0, FALSE)
+)
+.rq11_cell_masks <- list(
+  both        = primary_df$goal_pair_cell %in% "both",
+  ldl_only    = primary_df$goal_pair_cell %in% "ldl_only",
+  nonhdl_only = primary_df$goal_pair_cell %in% "nonhdl_only",
+  either      = coalesce(primary_df$at_either_goal == 1, FALSE)
+)
+
+rq11_goal_pair_partition <- local({
+  out <- list()
+  for (pn in names(.rq11_pop_masks)) {
+    for (cn in names(.rq11_cell_masks)) {
+      keep <- .rq11_pop_masks[[pn]] & .rq11_cell_masks[[cn]]
+      n_un <- sum(keep)
+      n_ev <- sum(keep & .rq11_A)
+      est <- lo <- hi <- dff <- eff <- dfree <- NA_real_
+      if (n_un > 0) {
+        dsub <- subset(apob_design, SEQN %in% primary_df$SEQN[keep])
+        ci <- try(svyciprop(~I(above_apob_goal == 1), dsub,
+                            method = "beta", na.rm = TRUE), silent = TRUE)
+        if (!inherits(ci, "try-error")) {
+          est <- as.numeric(ci)
+          lo  <- confint(ci)[1]
+          hi  <- confint(ci)[2]
+          ## deff from svymean, matching how RQ1c derives its effective n, so
+          ## the two are computed the same way and can be compared directly.
+          m <- try(suppressWarnings(
+                 svymean(~I(above_apob_goal == 1), dsub, deff = TRUE)),
+                 silent = TRUE)
+          if (!inherits(m, "try-error")) {
+            dff <- as.numeric(deff(m))[2]
+            if (is.finite(dff) && dff > 0) eff <- n_un / dff
+          }
+          dfree <- suppressWarnings(as.numeric(degf(dsub)))
+        }
+      }
+      out[[length(out) + 1]] <- tibble(
+        population      = pn,
+        cell            = cn,
+        n_unweighted    = n_un,
+        n_above_apob    = n_ev,
+        estimate        = est,
+        ci_low          = lo,
+        ci_high         = hi,
+        ci_width_abs    = hi - lo,
+        ci_width_rel    = ifelse(!is.na(est) & est > 0, (hi - lo) / est, NA_real_),
+        design_effect   = dff,
+        effective_n     = eff,
+        df              = dfree,
+        nchs_reportable = nchs_present(est, lo, hi, n_un, eff,
+                                       df = ifelse(is.na(dfree), 94, dfree),
+                                       n_events = n_ev)
+      )
+    }
+  }
+  bind_rows(out)
+})
+write.csv(rq11_goal_pair_partition, "rq11_goal_pair_partition.csv",
+          row.names = FALSE)
+
+## --- what the recommendation's phenotypes can and cannot support -------------
+## Reported because three of the four are unusable here and the paper has to
+## say so rather than quietly analysing only the one that works. ASCVD cannot
+## occur at all: ascvd_hx == 0 is a cohort filter, so the count below is a
+## structural zero and is written out precisely so a reader can see it is.
+rq11_phenotype_availability <- local({
+  d   <- primary_df
+  g   <- .rq11_G
+  llt <- g & coalesce(d$on_any_lipid_tx == 1, FALSE)
+  ## CKM syndrome as THIS guideline defines it (Section 2.1): a set of
+  ## characteristics, NOT the staged construct of the AHA advisory. The
+  ## earlier version of this block used stages 1 to 3, which do not appear
+  ## anywhere in this document -- they were imported from elsewhere and the
+  ## mistake reached the Supplement before the guideline itself was read.
+  ## The characteristics are abdominal obesity, insulin-resistant glucose
+  ## metabolism, dyslipidaemia (high triglycerides and low HDL-C), increased
+  ## blood pressure, and sometimes microalbuminuria, proteinuria or CKD.
+  ##
+  ## Adding low HDL-C cannot change what is reported: the union was already
+  ## every adult in the group, and the adiposity-only count was already zero,
+  ## so a broader union leaves both at their floor and ceiling. It is added
+  ## because the derivation should match the definition it claims to apply.
+  ckm_adip <- coalesce(d$BMXBMI >= 25, FALSE)
+  ckm_rest <- coalesce(d$diabetes  == 1, FALSE) |
+              coalesce(d$hypertrig == 1, FALSE) |
+              coalesce(d$LBDHDD < ifelse(coalesce(d$RIAGENDR, 1L) == 2, 50, 40),
+                       FALSE) |
+              coalesce(d$htn_flag  == 1, FALSE) |
+              coalesce(d$ckd       == 1, FALSE)
+  ckm_any  <- ckm_adip | ckm_rest
+  c3  <- coalesce(d$prevent_ascvd_10yr >= 0.10, FALSE)
+  tibble(
+    quantity = c(
+      "adults with an apoB goal",
+      "on lipid-lowering therapy",
+      "LLT, meeting at least one CKM syndrome characteristic",
+      "LLT, meeting the adiposity characteristic only",
+      "LLT, predicted 10-year ASCVD risk >=10%",
+      "LLT, predicted 10-year ASCVD risk >=20%",
+      "LLT, established ASCVD (structurally zero in this cohort)",
+      "LLT, triglycerides >=150 mg/dL",
+      "LLT, triglycerides >=200 mg/dL"),
+    n_unweighted = c(
+      sum(g), sum(llt), sum(llt & ckm_any), sum(llt & ckm_adip & !ckm_rest),
+      sum(llt & c3),
+      sum(llt & coalesce(d$prevent_ascvd_10yr >= 0.20, FALSE)),
+      sum(llt & coalesce(d$ascvd_hx == 1, FALSE)),
+      sum(llt & coalesce(d$LBXTR >= 150, FALSE)),
+      sum(llt & coalesce(d$LBXTR >= 200, FALSE))))
+})
+write.csv(rq11_phenotype_availability, "rq11_phenotype_availability.csv",
+          row.names = FALSE)
+
+## --- predicted risk distribution, for the CKM stage-3 statement --------------
+## Unweighted, and labelled as such: this supports a statement about what the
+## DATA can support ("no adult with an apoB goal reaches a 20% risk equivalent
+## often enough to stage"), which is a claim about the sample, not the
+## population.
+rq11_risk_distribution <- local({
+  r <- primary_df$prevent_ascvd_10yr[.rq11_G]
+  q <- quantile(r, c(.25, .5, .75, .9, .95, .99, 1), na.rm = TRUE)
+  tibble(statistic = c(names(q), "n", "n_missing", "n_ge_0.10", "n_ge_0.20"),
+         value = c(as.numeric(q), length(r), sum(is.na(r)),
+                   sum(r >= 0.10, na.rm = TRUE), sum(r >= 0.20, na.rm = TRUE)))
+})
+write.csv(rq11_risk_distribution, "rq11_risk_distribution.csv",
+          row.names = FALSE)
+
+## --- diagnostics, so audit_numbers.py can check every reported value ---------
+local({
+  a <- rq11_goal_pair_partition[rq11_goal_pair_partition$population == "all", ]
+  for (i in seq_len(nrow(a))) {
+    DIAG(paste0("rq11_all_", a$cell[i], "_n"), a$n_unweighted[i],
+         "RQ11 partition, full cohort")
+    DIAG(paste0("rq11_all_", a$cell[i], "_above_apob_n"), a$n_above_apob[i],
+         "RQ11 partition, full cohort")
+    if (!is.na(a$estimate[i]))
+      DIAG(paste0("rq11_all_", a$cell[i], "_pct"), 100 * a$estimate[i],
+           "RQ11 weighted % above apoB goal")
+  }
+  p <- rq11_phenotype_availability
+  DIAG("rq11_llt_ckm_any_n", p$n_unweighted[p$quantity ==
+         "LLT, meeting at least one CKM syndrome characteristic"],
+       "RQ11 phenotype availability")
+  DIAG("rq11_llt_adiposity_only_n", p$n_unweighted[p$quantity ==
+         "LLT, meeting the adiposity characteristic only"],
+       "RQ11; 0 means the CKM definition does not narrow this population")
+  DIAG("rq11_risk_max", max(primary_df$prevent_ascvd_10yr[.rq11_G], na.rm = TRUE),
+       "RQ11 maximum predicted 10-year ASCVD risk, adults with an apoB goal")
+})
+
+print(as.data.frame(rq11_goal_pair_partition))
+print(as.data.frame(rq11_phenotype_availability))
+message("RQ11: goal-pair partition written to rq11_goal_pair_partition.csv, ",
+        "phenotype availability to rq11_phenotype_availability.csv, predicted ",
+        "risk distribution to rq11_risk_distribution.csv. These are the ",
+        "primary source for every non-HDL-C number in the manuscript and the ",
+        "Supplement -- do not cite any of them from the feasibility_q2*.R ",
+        "scratch files, which are not part of the pipeline.")
+
+
+
+## =============================================================================
+## RQ12 -- DOES APOB STILL ADD INFORMATION AT LOW ACHIEVED LDL-C?
+## =============================================================================
+## ADDED 26 September 2026, at the request of a guideline writing-committee
+## member (comment 3):
+##
+##   "for those who have met LDLc and non HDLc goals -- in whom apo B is
+##    recommended / to be considered -- what the distribution of LDLc and non
+##    HDLc is for those with discordant apo B ... if lets say goal LDLc was
+##    <70 -- how much discordance was there if achieved LDLc was between
+##    60-70, 50-60 and so on? Is there a threshold where apo B does not add
+##    much value -- or if <55 -- if I have a LDLc of 40 -- is apo B helpful."
+##
+## WHAT THIS ASKS THAT NOTHING ABOVE DOES. Every apoB estimate in this script is
+## taken over a population defined by whether a goal was MET. This asks the
+## dose-response question instead: as achieved LDL-C falls, does the share whose
+## apoB exceeds the paired value fall with it, and is there a level below which
+## measuring apoB stops changing the picture? The only achieved-LDL-C construct
+## anywhere else here is the single binary low_achieved_ldl (< 70) in RQ9, which
+## cannot show a gradient.
+##
+## THE DENOMINATOR PROBLEM, STATED RATHER THAN WORKED AROUND. Asked exactly as
+## put -- within adults at BOTH goals -- the question lands on n = 259, and
+## splitting 259 five ways leaves cells nchs_present() will refuse. So the same
+## bands are reported over three nested populations, widest first:
+##
+##   goal_assigned  every adult with an apoB goal. The well-powered version;
+##                  achieved LDL-C spans both sides of the goal here.
+##   at_ldl_goal    the published 349.
+##   at_both_goals  the 259 -- the question as literally asked.
+##
+## Every cell carries its own nchs_present() flag. Which cells are reportable is
+## settled by those flags, not by picking the population that gives the answer
+## we would like.
+##
+## BANDS are absolute achieved Sampson LDL-C rather than distance from the
+## assigned goal, because the clinical question is put in absolute terms ("if I
+## have a LDL-C of 40"). The by-goal-value strata recover the relative reading:
+## among adults assigned apoB < 70, the 60-69 band IS "just under goal".
+##
+## SUBSETTING IS BY SEQN, as in RQ11, so each cell's design and its unweighted
+## n are provably the same people.
+## =============================================================================
+
+stopifnot(!is.null(primary_df$ldl_primary), !is.null(primary_df$nonhdl))
+
+.rq12_band <- cut(primary_df$ldl_primary,
+                  breaks = c(-Inf, 40, 55, 70, 100, Inf),
+                  labels = c("<40", "40-54", "55-69", "70-99", ">=100"),
+                  right  = FALSE)
+
+.rq12_pop_masks <- list(
+  goal_assigned = .rq11_G,
+  at_ldl_goal   = .rq11_G & coalesce(primary_df$at_ldl_goal == 1, FALSE),
+  at_both_goals = .rq11_G & primary_df$goal_pair_cell %in% "both"
+)
+.rq12_goal_masks <- list(
+  any_goal  = rep(TRUE,  nrow(primary_df)),
+  apob_lt70 = coalesce(primary_df$apob_goal == 70, FALSE),
+  apob_lt90 = coalesce(primary_df$apob_goal == 90, FALSE)
+)
+
+## --- VALIDATION --------------------------------------------------------------
+## The bands must partition each population exactly, and the two goal values
+## must partition the goal-assigned cohort exactly. If either fails, a band
+## boundary or apob_goal has moved and everything below is wrong with it.
+local({
+  for (pn in names(.rq12_pop_masks)) {
+    m  <- .rq12_pop_masks[[pn]]
+    nb <- sum(m & !is.na(.rq12_band))
+    if (nb != sum(m))
+      stop("\n\nRQ12: ", sum(m) - nb, " adult(s) in population '", pn,
+           "' have no achieved-LDL-C band, so ldl_primary is missing for ",
+           "someone the cohort filter should already have excluded.\n",
+           call. = FALSE)
+  }
+  g70 <- sum(.rq11_G & .rq12_goal_masks$apob_lt70)
+  g90 <- sum(.rq11_G & .rq12_goal_masks$apob_lt90)
+  if (g70 + g90 != sum(.rq11_G))
+    stop("\n\nRQ12: apoB goal values do not partition the goal-assigned ",
+         "cohort. <70: ", g70, ", <90: ", g90, ", assigned: ", sum(.rq11_G),
+         ". A third goal value has appeared in primary prevention; < 55 ",
+         "should arise only in secondary prevention.\n", call. = FALSE)
+  message("RQ12 validation: bands partition all three populations; goal ",
+          "values partition the assigned cohort (<70: ", g70,
+          ", <90: ", g90, ").")
+  DIAG("rq12_validation_goal_lt70_n", g70, "adults assigned apoB < 70")
+  DIAG("rq12_validation_goal_lt90_n", g90, "adults assigned apoB < 90")
+})
+
+## --- share above the paired apoB value, by achieved LDL-C --------------------
+rq12_by_achieved_ldl <- local({
+  out <- list()
+  for (pn in names(.rq12_pop_masks)) {
+    for (gn in names(.rq12_goal_masks)) {
+      for (bn in levels(.rq12_band)) {
+        keep <- .rq12_pop_masks[[pn]] & .rq12_goal_masks[[gn]] &
+                !is.na(.rq12_band) & .rq12_band == bn
+        n_un <- sum(keep)
+        n_ev <- sum(keep & .rq11_A)
+        est <- lo <- hi <- dff <- eff <- dfree <- NA_real_
+        if (n_un > 0) {
+          dsub <- subset(apob_design, SEQN %in% primary_df$SEQN[keep])
+          ci <- try(svyciprop(~I(above_apob_goal == 1), dsub,
+                              method = "beta", na.rm = TRUE), silent = TRUE)
+          if (!inherits(ci, "try-error")) {
+            est <- as.numeric(ci); lo <- confint(ci)[1]; hi <- confint(ci)[2]
+            m <- try(suppressWarnings(
+                   svymean(~I(above_apob_goal == 1), dsub, deff = TRUE)),
+                   silent = TRUE)
+            if (!inherits(m, "try-error")) {
+              dff <- as.numeric(deff(m))[2]
+              if (is.finite(dff) && dff > 0) eff <- n_un / dff
+            }
+            dfree <- suppressWarnings(as.numeric(degf(dsub)))
+          }
+        }
+        out[[length(out) + 1]] <- tibble(
+          population      = pn,
+          apob_goal_value = gn,
+          achieved_ldl    = bn,
+          n_unweighted    = n_un,
+          n_above_apob    = n_ev,
+          estimate        = est,
+          ci_low          = lo,
+          ci_high         = hi,
+          ci_width_abs    = hi - lo,
+          ci_width_rel    = ifelse(!is.na(est) & est > 0,
+                                   (hi - lo) / est, NA_real_),
+          design_effect   = dff,
+          effective_n     = eff,
+          df              = dfree,
+          nchs_reportable = nchs_present(est, lo, hi, n_un, eff,
+                                         df = ifelse(is.na(dfree), 94, dfree),
+                                         n_events = n_ev)
+        )
+      }
+    }
+  }
+  bind_rows(out)
+})
+write.csv(rq12_by_achieved_ldl, "rq12_by_achieved_ldl.csv", row.names = FALSE)
+
+## --- lipid distribution among those above vs at the paired apoB value --------
+## The second half of the comment: what the LDL-C and non-HDL-C distributions
+## look like for the discordant. Survey-weighted quartiles, so they sit on the
+## same footing as every other weighted statistic in this script.
+rq12_lipid_distribution <- local({
+  out  <- list()
+  vars <- c(ldl_primary = "achieved LDL-C, mg/dL",
+            nonhdl      = "achieved non-HDL-C, mg/dL",
+            LBXAPB      = "apoB, mg/dL")
+  for (pn in names(.rq12_pop_masks)) {
+    for (ab in c(TRUE, FALSE)) {
+      keep <- .rq12_pop_masks[[pn]] & (if (ab) .rq11_A else !.rq11_A)
+      n_un <- sum(keep)
+      if (n_un == 0) next
+      dsub <- subset(apob_design, SEQN %in% primary_df$SEQN[keep])
+      for (v in names(vars)) {
+        qq <- rep(NA_real_, 3)
+        q  <- try(suppressWarnings(
+                svyquantile(as.formula(paste0("~", v)), dsub,
+                            quantiles = c(0.25, 0.5, 0.75),
+                            na.rm = TRUE, ci = FALSE)), silent = TRUE)
+        if (!inherits(q, "try-error")) {
+          z <- try(as.numeric(coef(q)), silent = TRUE)
+          if (inherits(z, "try-error") || length(z) < 3)
+            z <- suppressWarnings(as.numeric(unlist(q)))
+          if (length(z) >= 3) qq <- z[1:3]
+        }
+        out[[length(out) + 1]] <- tibble(
+          population   = pn,
+          apob_status  = if (ab) "above apoB value" else "at or below apoB value",
+          measure      = unname(vars[[v]]),
+          n_unweighted = n_un,
+          p25          = qq[1],
+          median       = qq[2],
+          p75          = qq[3]
+        )
+      }
+    }
+  }
+  bind_rows(out)
+})
+write.csv(rq12_lipid_distribution, "rq12_lipid_distribution.csv",
+          row.names = FALSE)
+
+## --- the gradient, recorded so the document build cannot misread it ----------
+local({
+  a <- rq12_by_achieved_ldl[rq12_by_achieved_ldl$population == "goal_assigned" &
+                            rq12_by_achieved_ldl$apob_goal_value == "any_goal", ]
+  for (i in seq_len(nrow(a)))
+    DIAG(paste0("rq12_above_apob_pct_ldl_", gsub("[^0-9a-zA-Z]", "", a$achieved_ldl[i])),
+         100 * a$estimate[i],
+         paste0("goal-assigned, achieved LDL-C ", a$achieved_ldl[i],
+                "; n = ", a$n_unweighted[i], "; reportable = ",
+                a$nchs_reportable[i]))
+})
+
+print(as.data.frame(rq12_by_achieved_ldl))
+print(as.data.frame(rq12_lipid_distribution))
+message("RQ12: written to rq12_by_achieved_ldl.csv and ",
+        "rq12_lipid_distribution.csv. Read nchs_reportable before quoting any ",
+        "cell -- the narrow populations are expected to fail it.")
+
 
 ## =============================================================================
 ## 11b. SENSITIVITY ANALYSIS -- HOW MUCH OF "DISCORDANCE" WAS THE LDL-C EQUATION?
@@ -3682,7 +4194,7 @@ print(sens_rq1_totals)
 # --- Comparison 2: reclassification among adults at LDL-C goal --------------
 sens_reclass_alt_design <- subset(apob_design, !is.na(ldl_alt) & at_ldl_goal_alt == 1)
 sens_reclass_alt <- tryCatch(
-  svyciprop(~I(discordant_alt == 1), sens_reclass_alt_design, method = "logit"),
+  svyciprop(~I(discordant_alt == 1), sens_reclass_alt_design, method = "beta"),
   error = function(e) {
     message("Could not compute alternative-equation reclassification CI: ", conditionMessage(e))
     NULL
@@ -3708,7 +4220,7 @@ if (!is.null(sens_reclass_alt)) {
 # heavily overlapping CIs.
 sens_rq8b_alt <- tryCatch(
   svyby(~I(discordant_alt == 1), ~on_statin, sens_reclass_alt_design,
-        svyciprop, vartype = "ci", method = "logit"),
+        svyciprop, vartype = "ci", method = "beta"),
   error = function(e) {
     message("Could not compute alternative-equation statin comparison: ", conditionMessage(e))
     NULL
@@ -4084,7 +4596,7 @@ message("Secondary-prevention apoB-goal subpopulation: ",
 
 secondary_reclass_design <- subset(secondary_apob_design, at_ldl_goal == 1)
 secondary_reclass_weighted <- tryCatch(
-  svyciprop(~I(discordant == 1), secondary_reclass_design, method = "logit"),
+  svyciprop(~I(discordant == 1), secondary_reclass_design, method = "beta"),
   error = function(e) {
     message("Could not compute weighted reclassification CI for secondary prevention ",
             "(likely too few at-goal secondary-prevention records in this cell): ", conditionMessage(e))
@@ -4110,6 +4622,11 @@ if (!is.null(secondary_reclass_weighted)) print(secondary_reclass_weighted)
 
 secondary_df <- secondary_df %>%
   mutate(
+    ## REDUNDANT SINCE 24 September 2026, and kept only so this block reads in
+    ## one piece. assign_goals() now defines on_any_lipid_tx for every cohort
+    ## with an identical rule, so this line recomputes the same value and
+    ## overwrites it with itself. If the two ever differ, assign_goals() is the
+    ## canonical one and this line is the bug.
     on_any_lipid_tx = as.integer(on_statin == 1 | on_nonstatin_lipid_tx == 1),
     treatment_status = case_when(
       on_any_lipid_tx == 0 & above_apob_goal == 1 ~ "untreated_above_goal",
@@ -4142,7 +4659,11 @@ secondary_design <- update(
 ## above are absent from the subpopulation object unless it is rebuilt.
 secondary_apob_design <- subset(secondary_design, has_apob_goal == 1)
 
-rq6d_statin_prevalence <- svyciprop(~I(on_statin == 1), secondary_design, method = "logit")
+## OCTOBER 2026: every proportion in this block (statin and any
+## lipid-lowering therapy use, untreated shares, and their income and
+## insurance breakdowns) now uses method = "beta", Korn-Graubard, as the
+## Methods state. They were logit intervals; eTable 10 reports them.
+rq6d_statin_prevalence <- svyciprop(~I(on_statin == 1), secondary_design, method = "beta")
 rq6d_statin_summary <- tibble(
   metric   = "on_any_statin",
   estimate = as.numeric(rq6d_statin_prevalence),
@@ -4151,7 +4672,7 @@ rq6d_statin_summary <- tibble(
 )
 print(rq6d_statin_summary)
 
-rq6d_anylipidtx_prevalence <- svyciprop(~I(on_any_lipid_tx == 1), secondary_design, method = "logit")
+rq6d_anylipidtx_prevalence <- svyciprop(~I(on_any_lipid_tx == 1), secondary_design, method = "beta")
 rq6d_anylipidtx_summary <- tibble(
   metric   = "on_any_lipid_lowering_therapy",
   estimate = as.numeric(rq6d_anylipidtx_prevalence),
@@ -4160,15 +4681,14 @@ rq6d_anylipidtx_summary <- tibble(
 )
 print(rq6d_anylipidtx_summary)
 
-rq6d_treatment_prev <- svymean(~treatment_status, secondary_apob_design)
-rq6d_treatment_tot  <- svytotal(~treatment_status, secondary_apob_design)
-rq6d_treatment_summary <- tibble(
-  treatment_status = sub("^treatment_status", "", names(coef(rq6d_treatment_prev))),
-  prevalence = as.numeric(coef(rq6d_treatment_prev)),
-  ci_low     = confint(rq6d_treatment_prev)[, 1],
-  ci_high    = confint(rq6d_treatment_prev)[, 2],
-  population = as.numeric(coef(rq6d_treatment_tot))
-)
+## OCTOBER 2026: the treatment-status cells were svymean() with linearized
+## (Wald) intervals, symmetric about the estimate and the one place in the
+## Supplement whose proportions were not Korn-Graubard, although the Methods
+## say every proportion is. They now go through kg_cell_summary(), the same
+## per-cell Korn-Graubard routine as the goal-cell breakdowns, which also
+## records ci_method so build_supplement.py can refuse anything else.
+rq6d_treatment_summary <- kg_cell_summary(secondary_apob_design, "treatment_status") %>%
+  dplyr::rename(treatment_status = goal_cell)
 print(rq6d_treatment_summary)
 
 # Among only those above ApoB goal (the clinically actionable slice): what
@@ -4176,7 +4696,7 @@ print(rq6d_treatment_summary)
 # vs already on therapy but still not at goal (a treatment-intensity gap)?
 rq6d_among_above_goal <- subset(secondary_apob_design, above_apob_goal == 1)
 rq6d_untreated_share <- tryCatch(
-  svyciprop(~I(on_any_lipid_tx == 0), rq6d_among_above_goal, method = "logit"),
+  svyciprop(~I(on_any_lipid_tx == 0), rq6d_among_above_goal, method = "beta"),
   error = function(e) {
     message("Could not compute weighted untreated-share CI (likely too few records in this cell): ",
             conditionMessage(e))
@@ -4211,7 +4731,7 @@ if (!is.null(rq6d_untreated_share)) {
 ## questions, not an unstable estimate. Report both, labelled, so the movement
 ## is legible rather than alarming.
 rq6d_untreated_all <- svyciprop(~I(on_any_lipid_tx == 0), secondary_design,
-                                method = "logit")
+                                method = "beta")
 rq6d_untreated_all_summary <- tibble(
   metric   = "untreated_share_ALL_secondary_prevention",
   n_unweighted = nrow(secondary_df),
@@ -4226,7 +4746,7 @@ write.csv(rq6d_untreated_all_summary,
 ## Same contrast by income and insurance, on the full cohort.
 rq6e_all_income <- svyby(~I(on_any_lipid_tx == 0), ~income_tier,
                          subset(secondary_design, !is.na(income_tier)),
-                         svyciprop, vartype = "ci", method = "logit")
+                         svyciprop, vartype = "ci", method = "beta")
 rq6e_all_income_df <- as_tibble(rq6e_all_income)
 names(rq6e_all_income_df)[2] <- "untreated_share"
 cat("\nUntreated share by income -- ALL secondary prevention (n=",
@@ -4237,7 +4757,7 @@ write.csv(rq6e_all_income_df,
 
 rq6e_all_insurance <- svyby(~I(on_any_lipid_tx == 0), ~insured,
                             subset(secondary_design, !is.na(insured)),
-                            svyciprop, vartype = "ci", method = "logit")
+                            svyciprop, vartype = "ci", method = "beta")
 rq6e_all_insurance_df <- as_tibble(rq6e_all_insurance)
 names(rq6e_all_insurance_df)[2] <- "untreated_share"
 cat("Untreated share by insurance -- ALL secondary prevention:\n")
@@ -4280,7 +4800,7 @@ message("RQ6d: treatment-adequacy breakdown written to rq6d_*.csv. Read treatmen
 rq6e_income_design <- subset(secondary_apob_design, !is.na(income_tier))
 rq6e_untreated_by_income <- tryCatch(
   svyby(~I(on_any_lipid_tx == 0), ~income_tier, rq6e_income_design,
-        svyciprop, vartype = "ci", method = "logit"),
+        svyciprop, vartype = "ci", method = "beta"),
   error = function(e) {
     message("Could not compute untreated share by income tier -- likely a cell too small ",
             "in this subgroup (", conditionMessage(e), "). Skipping this comparison.")
@@ -4297,7 +4817,7 @@ if (!is.null(rq6e_untreated_by_income)) {
 rq6e_insurance_design <- subset(secondary_apob_design, !is.na(insured))
 rq6e_untreated_by_insurance <- tryCatch(
   svyby(~I(on_any_lipid_tx == 0), ~insured, rq6e_insurance_design,
-        svyciprop, vartype = "ci", method = "logit"),
+        svyciprop, vartype = "ci", method = "beta"),
   error = function(e) {
     message("Could not compute untreated share by insurance status -- likely a cell too small ",
             "in this subgroup (", conditionMessage(e), "). Skipping this comparison.")

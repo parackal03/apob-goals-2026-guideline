@@ -1,3 +1,4 @@
+## OCTOBER 2026: logit intervals switched to method = "beta" (Korn-Graubard).
 ## =============================================================================
 ## precedence_diagnostics.R
 ##
@@ -123,7 +124,7 @@ d_str$variables$.disc_lenient  <- as.integer(
 d_sub <- subset(d_str, has_apob_goal == 1)
 
 grab <- function(design, var) {
-  ci <- svyciprop(as.formula(paste0("~I(", var, " == 1)")), design, method = "logit")
+  ci <- svyciprop(as.formula(paste0("~I(", var, " == 1)")), design, method = "beta")
   c(est = as.numeric(ci), lo = confint(ci)[1], hi = confint(ci)[2])
 }
 d_ldl <- subset(d_sub, at_ldl_goal == 1)

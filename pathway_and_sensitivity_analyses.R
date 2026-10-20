@@ -79,7 +79,7 @@ message("\n=== ROUND 4 ANALYSES ===")
 ## =============================================================================
 ## R4a. WHICH PATHWAY ASSIGNS WHICH GOAL  (comment 7)
 ##
-## Dani's point: Table 2 says how many adults get a goal but not who they are.
+## The reviewer's point: Table 2 says how many adults get a goal but not who they are.
 ## A reader cannot tell whether the goal-assigned population is mostly people
 ## with diabetes, mostly people with high triglycerides, or a mixture, nor
 ## which of them get the stricter <70 target.
@@ -258,7 +258,7 @@ message("  Both panels partition the ", sec_n,
 ## R4b. WHO THE 349 ARE  (comment 8)
 ##
 ## The 22.8% (now recomputed) is a conditional probability within a selected
-## subgroup, and Dani is right that a reader can mistake it for a population
+## subgroup, and the reviewer is right that a reader can mistake it for a population
 ## prevalence. The defence is to show who that subgroup is: if the adults at
 ## their LDL-C goal look systematically different from the rest of the
 ## goal-assigned cohort, the conditional reading is unavoidable and the table

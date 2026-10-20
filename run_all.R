@@ -39,8 +39,17 @@ run_all <- function(
   ## pathway_and_sensitivity_analyses.R because it needs nothing from it and,
   ## for the same reason, any failure then costs only itself. It is skipped, not failed, when the blind
   ## coder's returned file is absent -- that file is not in the repository.
+  ## cascade_analysis.R (RQ13, October 2026): the overall / primary /
+  ## secondary measurement cascade. After precedence_and_model_analyses.R,
+  ## whose combined-denominator file it checks itself against; required, so a
+  ## mismatch with the published estimates stops the run.
+  ## reviewer_strata_analysis.R (RQ14, 16 October 2026): residual apoB
+  ## elevation by triglyceride band, rows matched and lipid-lowering therapy,
+  ## for the reviewer round; also caches the analysis frames.
   scripts = c("nhanes_apob_analysis.R",
               "precedence_and_model_analyses.R",
+              "cascade_analysis.R",
+              "reviewer_strata_analysis.R",
               "precedence_diagnostics.R",
               "verify_run.R",
               "table1_and_figures.R",
@@ -150,7 +159,7 @@ run_all <- function(
   }
 
   ## ---- session and package provenance -----------------------------------
-  ## Round-6 (Dani): "preserve package/session information". The README lists
+  ## Round-6 (reviewer): "preserve package/session information". The README lists
   ## the versions this analysis was developed against; this records the ones
   ## that actually produced THIS run, next to its outputs, so a reader can see
   ## whether their environment differs from the submitted one rather than

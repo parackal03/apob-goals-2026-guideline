@@ -13,7 +13,9 @@ abstract: >-
   Because Figure 1's patient-population rows overlap and the guideline states
   no precedence rule, goals are assigned by an order-independent union rule:
   a goal applies if any matched row states one, and where matched rows differ
-  the most stringent value applies. No data are distributed; the NHANES cycles
+  the most stringent value applies. Results are reported as a measurement
+  cascade, overall and for primary and secondary prevention, with
+  Korn-Graubard intervals throughout. No data are distributed; the NHANES cycles
   and the NCHS linked mortality files are downloaded from CDC at run time.
 type: software
 repository-code: "https://github.com/parackal03/apob-goals-2026-guideline"
@@ -29,12 +31,15 @@ authors:
       Division of Cardiology, Lahey Hospital and Medical Center,
       Beth Israel Lahey Health, Burlington, Massachusetts, USA
 license: MIT
+# 1.1.0 (20 October 2026): measurement cascade and reviewer-requested subgroup
+# analyses added; Korn-Graubard intervals throughout. 1.0.0 was the
+# September submission state.
 # Tagged for the JAMA Cardiology submission. The DOI stays commented out
 # below until Zenodo mints one, which happens when the release is cut with
 # the repository connected to Zenodo -- filling it in beforehand would
 # promise a resolver that does not yet resolve.
-version: "1.0.0"
-date-released: "2026-09-18"
+version: "1.1.0"
+date-released: "2026-10-20"
 keywords:
   - apolipoprotein B
   - dyslipidemia

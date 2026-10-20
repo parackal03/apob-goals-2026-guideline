@@ -1,3 +1,4 @@
+## OCTOBER 2026: logit intervals switched to method = "beta" (Korn-Graubard).
 ## =============================================================================
 ## precedence_and_model_analyses.R
 ## Sensitivity of goal assignment to the precedence question, and the
@@ -23,7 +24,7 @@
 ##   rev3_correlates_unadjusted.csv    Reviewer major comment 3
 ##   rev3_epv_table.csv                Reviewer major comment 3
 ##   rev4_cycle_influence_on_share.csv Reviewer major comment 4
-##   rev6_sampson800_sensitivity.csv  Dani review round 2, item 4
+##   rev6_sampson800_sensitivity.csv  Reviewer round 2, item 4
 ## =============================================================================
 
 suppressPackageStartupMessages({
@@ -339,10 +340,10 @@ headline_under <- function(goal_vec, label) {
   d$variables$.disc  <- as.integer(d$variables$at_ldl_goal == 1 &
                                    above_goal(d$variables$LBXAPB, goal_vec))
   d2 <- subset(d, !is.na(.goal))
-  disc <- svyciprop(~I(.disc == 1), d2, method = "logit")
+  disc <- svyciprop(~I(.disc == 1), d2, method = "beta")
   d3 <- subset(d2, at_ldl_goal == 1)
   n3 <- nrow(d3$variables)
-  rec <- if (n3 > 0) svyciprop(~I(.above == 1), d3, method = "logit") else NA
+  rec <- if (n3 > 0) svyciprop(~I(.above == 1), d3, method = "beta") else NA
   tibble(variant = label,
          discordance = as.numeric(disc),
          disc_lo = confint(disc)[1], disc_hi = confint(disc)[2],
@@ -642,7 +643,7 @@ loo <- map_dfr(c("(none)", cycles), function(drop) {
   d <- if (drop == "(none)") primary_design else subset(primary_design, cycle != drop)
   share <- svyciprop(~I(has_apob_goal == 1), d, method = "beta")
   d2 <- subset(d, has_apob_goal == 1)
-  disc <- svyciprop(~I(discordant == 1), d2, method = "logit")
+  disc <- svyciprop(~I(discordant == 1), d2, method = "beta")
   tibble(cycle_dropped = drop,
          goal_share = as.numeric(share),
          discordance = as.numeric(disc))
@@ -662,7 +663,7 @@ message("\n  With apoB calibration applied, cycle D influence on discordance sho
         "2007-2016 estimate should be made co-primary.")
 
 ## =============================================================================
-## R6. SAMPSON VALIDITY CEILING  (Dani, review round 2, item 4)
+## R6. SAMPSON VALIDITY CEILING  (reviewer, round 2, item 4)
 ##
 ## There is no R5 here: rev5_stringency_sensitivity.csv is produced by
 ## precedence_diagnostics.R. This section is numbered to match its own output file.

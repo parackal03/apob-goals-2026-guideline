@@ -20,7 +20,7 @@ setwd("<this folder>")
 source("run_all.R")
 ```
 
-`run_all.R` runs the seven scripts below in order, in a single R session, and
+`run_all.R` runs the nine scripts below in order, in a single R session, and
 writes a complete transcript to `run_log_<date>_<time>.txt`. Use it rather than
 sourcing by hand: RStudio keeps only the last 1,000 console lines and this
 pipeline prints far more, so without the log the beginning of every run is
@@ -31,11 +31,13 @@ diffing this run's log against the previous one shows which step it moved at.
 |---|---|---|---|
 | 1 | `nhanes_apob_analysis.R` | Main analysis: download, merge, derive, implement Figure 1, every research question | 57-147 min |
 | 2 | `precedence_and_model_analyses.R` | Precedence sensitivity across all 120 orderings, denominator variants, EPV, Firth | <1 min |
-| 3 | `precedence_diagnostics.R` | Two diagnostics: precedence driver, stringency sensitivity | fast |
-| 4 | `verify_run.R` | 29 automated checks; writes `verification_report.csv` | fast |
-| 5 | `table1_and_figures.R` | Baseline characteristics table and the figures | fast |
-| 6 | `pathway_and_sensitivity_analyses.R` | Goal-assignment pathways, secondary-prevention routes, phenotype at LDL-C goal, hypertension threshold, stroke-only ASCVD, no-age-limit secondary prevention, ASCVD risk-factor age rule | 30-38 min |
-| 7 | `compare_blind_coding.R` | Agreement, Cohen's kappa, and the effect of coding differences on the headline estimates | fast |
+| 3 | `cascade_analysis.R` | The measurement cascade (selected for apoB measurement, above the stated value, above it at goal) overall and for primary and secondary prevention; checks itself against the published estimates | <1 min |
+| 4 | `reviewer_strata_analysis.R` | The cascade by triglyceride band, number of guideline rows matched, and lipid-lowering therapy; also caches the analysis frames (`analysis_frames_cache.rds`) so follow-up analyses can run without the full rebuild | <1 min |
+| 5 | `precedence_diagnostics.R` | Two diagnostics: precedence driver, stringency sensitivity | fast |
+| 6 | `verify_run.R` | 29 automated checks; writes `verification_report.csv` | fast |
+| 7 | `table1_and_figures.R` | Baseline characteristics table and the figures | fast |
+| 8 | `pathway_and_sensitivity_analyses.R` | Goal-assignment pathways, secondary-prevention routes, phenotype at LDL-C goal, hypertension threshold, stroke-only ASCVD, no-age-limit secondary prevention, ASCVD risk-factor age rule | 30-38 min |
+| 9 | `compare_blind_coding.R` | Agreement, Cohen's kappa, and the effect of coding differences on the headline estimates | fast |
 
 Each later script reads objects the earlier ones leave in the global
 environment, and each carries a preflight check that stops with instructions
@@ -52,11 +54,12 @@ not distributed here**, so it is marked optional in `run_all.R`: it is skipped
 with a message rather than aborting the run. It is included so the comparison
 method is inspectable.
 
-Two further scripts sit outside the sequence and are run on their own, after the
-main analysis, in the same session:
+Three further scripts sit outside the sequence and are run on their own, after
+the main analysis:
 
 | Script | Runs how |
 |---|---|
+| `make_cascade_figure_dualgoal.R` | Draws the published Figure from the CSVs the pipeline writes (`Rscript make_cascade_figure_dualgoal.R`, in the same folder). |
 | `cohort_definition_diagnostics.R` | Diagnostics on cohort eligibility and the hypertension definition; changes nothing. |
 | `export_blind_dataset.R` | Rebuilds the de-identified dataset that was given to an independent coder, guarding against 24 forbidden column patterns. |
 
@@ -138,18 +141,21 @@ build; the error message gives the full command.
 
 | Script | Lines | Purpose |
 |---|---|---|
-| `run_all.R` | 180 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
-| `nhanes_apob_analysis.R` | 4682 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~50 CSVs (including goal assignment over all eligible adults for those PREVENT cannot score, the PREVENT input-range diagnostic, the 180-versus-200 systolic comparison, and the base-versus-extended PREVENT model comparison) |
-| `precedence_and_model_analyses.R` | 810 | Precedence sensitivity across all 120 orderings, denominator variants, events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
-| `precedence_diagnostics.R` | 157 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
+| `run_all.R` | 189 | Runs the pipeline in order in one session and writes a full transcript to `run_log_<date>_<time>.txt`, and records the environment that produced it in `session_info.txt` and `session_packages.csv` |
+| `nhanes_apob_analysis.R` | 5202 | Loads and merges six NHANES cycles, derives all variables, implements Figure 1 of the guideline, runs every research question, writes ~50 CSVs (including goal assignment over all eligible adults for those PREVENT cannot score, the PREVENT input-range diagnostic, the 180-versus-200 systolic comparison, and the base-versus-extended PREVENT model comparison). All proportions carry Korn-Graubard intervals |
+| `precedence_and_model_analyses.R` | 811 | Precedence sensitivity across all 120 orderings, denominator variants (including the all-adult range by reading), events-per-variable, unadjusted correlates, Firth penalised regression, and the Sampson validity-ceiling sensitivity |
+| `cascade_analysis.R` | 203 | The measurement cascade overall, in primary prevention and in secondary prevention (`rq13_cascade_by_cohort.csv`); stops if any cell disagrees with the previously published estimate it reproduces |
+| `reviewer_strata_analysis.R` | 143 | Residual apoB elevation by triglyceride band, number of guideline rows matched, and lipid-lowering therapy (`rq14_reviewer_strata.csv`); checks that the strata partition the measurement group |
+| `precedence_diagnostics.R` | 158 | Two diagnostics: which Figure 1 row drives the precedence span, and the stringency sensitivity |
 | `verify_run.R` | 429 | 29 independent checks: convergence, separation, goal-cell consistency, survey design sanity, NCHS presentation standards, cycle influence, mortality event counts, config provenance |
-| `table1_and_figures.R` | 416 | Baseline characteristics table, the figures, and the per-cycle apoB means behind the calibration figure |
+| `table1_and_figures.R` | 418 | Baseline characteristics table, the figures, and the per-cycle apoB means behind the calibration figure |
 | `pathway_and_sensitivity_analyses.R` | 659 | Goal assignment by Figure 1 pathway and their overlap, secondary-prevention routes, phenotype of adults at their LDL-C goal, hypertension threshold sensitivity, stroke-only ASCVD, secondary prevention without the PREVENT age restriction, and the ASCVD risk-factor age rule |
-
-Every script also records the counts it prints to the console into `run_diagnostics.csv`, written at the end of the run. Those counts (the PREVENT clipping total, the Friedewald comparison arm, the mortality-linked deaths, the first-match absorption breakdown and others) are quoted in the manuscript and Supplement, and until round 7 they existed only in the run log, where no check could see them.
 | `compare_blind_coding.R` | 224 | Agreement, Cohen's kappa, weighted kappa, and the effect of coding differences on the headline estimates |
+| `make_cascade_figure_dualgoal.R` | 139 | Draws the published Figure (the cascade, with adults at both goals and at the LDL-C goal shown as two definitions of control) from the pipeline's CSVs |
 | `export_blind_dataset.R` | 115 | Builds the de-identified dataset released to the independent coder, guarding against 24 forbidden column patterns |
 | `cohort_definition_diagnostics.R` | 185 | What the LDL-C eligibility filter excludes, and the hypertension definition under first-reading versus averaged blood pressure |
+
+Every script also records the counts it prints to the console into `run_diagnostics.csv`, written at the end of the run. Those counts (the PREVENT clipping total, the Friedewald comparison arm, the mortality-linked deaths, the first-match absorption breakdown and others) are quoted in the manuscript and Supplement, and until round 7 they existed only in the run log, where no check could see them.
 
 
 > **Run time.** A full run took 88 minutes on 18 September and 186 minutes

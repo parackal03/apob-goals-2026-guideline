@@ -1,3 +1,5 @@
+## OCTOBER 2026: Table 1 proportions now use method = "beta" (Korn-Graubard),
+## matching the rest of the paper; they were logit intervals.
 ## =============================================================================
 ## table1_and_figures.R
 ##
@@ -89,13 +91,13 @@ binr <- function(design, expr) {
   f <- as.formula(paste0("~I(", expr, ")"))
   v <- eval(parse(text = expr), design$variables)
   if (sum(v %in% TRUE, na.rm = TRUE) == 0) return("0.0 (0.0-0.0)")
-  p <- svyciprop(f, design, method = "logit", na.rm = TRUE)
+  p <- svyciprop(f, design, method = "beta", na.rm = TRUE)
   sprintf("%.1f (%.1f-%.1f)", 100*as.numeric(p), 100*confint(p)[1], 100*confint(p)[2])
 }
 ## categorical level percent
 catl <- function(design, var, lvl) {
   f <- as.formula(paste0("~I(", var, " == '", lvl, "')"))
-  p <- svyciprop(f, design, method = "logit", na.rm = TRUE)
+  p <- svyciprop(f, design, method = "beta", na.rm = TRUE)
   sprintf("%.1f", 100*as.numeric(p))
 }
 
@@ -196,7 +198,7 @@ p1 <- ggplot(fig1_dat, aes(x = xpos, y = 100*share)) +
   scale_y_continuous(limits = c(10, 38), breaks = seq(10, 35, 5),
                      labels = function(x) paste0(x, "%")) +
   labs(x = NULL,
-       y = "US adults aged 30-79 without established ASCVD\nassigned an apolipoprotein B goal",
+       y = "US adults aged 30-79 without established ASCVD\nin an apolipoprotein B measurement group",
        caption = "Points are survey-weighted estimates with 95% Korn-Graubard intervals.") +
   theme_classic(base_size = 11) +
   theme(axis.text.x = element_text(size = 9.5),
@@ -243,13 +245,13 @@ cascade <- data.frame(
   lo    = c(.pct(.union$ci_low),  .pct(.above$ci_low),   .pct(.recl$ci_low)),
   hi    = c(.pct(.union$ci_high), .pct(.above$ci_high),  .pct(.recl$ci_high)),
   title = c("US adults 30-79 y,\nno established ASCVD",
-            "Adults assigned\nan apoB goal",
+            "Adults in an apoB\nmeasurement group",
             "Of those, adults at\ntheir LDL-C goal"),
   nlab  = c(sprintf("n = %s", format(n_pp,     big.mark = ",")),
             sprintf("n = %s", format(n_goal,   big.mark = ",")),
             sprintf("n = %s", format(n_atgoal, big.mark = ","))),
-  sub   = c("assigned an apoB goal", "above their apoB goal",
-            "above apoB goal with LDL-C at goal"),
+  sub   = c("in an apoB measurement group", "above their apoB value",
+            "above apoB value with LDL-C at goal"),
   stringsAsFactors = FALSE
 )
 

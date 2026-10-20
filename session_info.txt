@@ -12,7 +12,7 @@ locale:
 [4] LC_NUMERIC=C                          
 [5] LC_TIME=English_United States.utf8    
 
-time zone: America/Chicago
+time zone: Asia/Calcutta
 tzcode source: internal
 
 attached base packages:
